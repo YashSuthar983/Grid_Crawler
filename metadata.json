@@ -1,0 +1,6 @@
+{
+  "name": "PacketPath: Grid Sequencer",
+  "description": "A gamified power grid fault management system featuring BFS pathfinding, DFS zone mapping, and Round Robin crew scheduling.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
