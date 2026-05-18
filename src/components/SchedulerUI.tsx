@@ -65,12 +65,12 @@ const SchedulerUI: React.FC<SchedulerUIProps> = ({ gantt, faults, crews, current
                           style={{
                             left: entry.start * scale,
                             width: (entry.end - entry.start) * scale,
-                            backgroundColor: isTravel ? '#f1f5f9' : `hsla(${parseInt(entry.taskId) * 137.5 % 360}, 80%, 80%, 0.5)`,
+                            backgroundColor: isTravel ? '#f1f5f9' : `hsla(${(parseInt(entry.taskId.replace(/\D/g, '')) || 0) * 137.5 % 360}, 80%, 80%, 0.5)`,
                             borderLeft: isTravel ? '4px solid #f59e0b' : '4px solid #3b82f6'
                           }}
                         >
                           <span className={`text-[9px] font-bold truncate px-1 ${isTravel ? 'text-slate-500' : 'text-slate-800'}`}>
-                            {isTravel ? '->' : fault?.substationId}
+                            {isTravel ? (entry.taskId === 'ret' ? 'Return' : '->') : fault?.substationId}
                           </span>
                         </motion.div>
                       );

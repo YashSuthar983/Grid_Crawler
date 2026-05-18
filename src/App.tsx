@@ -136,8 +136,11 @@ export default function App() {
       let nodeId: string | null = null;
       let isWorking = false;
       
+      let currentPath: string[] | undefined;
+      
       if (activeTask) {
         if (activeTask.type === 'travel' && activeTask.path) {
+          currentPath = activeTask.path;
           // Interpolate along the path
           const progress = (simTime - activeTask.start) / (activeTask.end - activeTask.start);
           const totalEdges = activeTask.path.length - 1;
@@ -183,7 +186,8 @@ export default function App() {
         nodeId,
         x,
         y,
-        isWorking
+        isWorking,
+        currentPath
       };
     });
   }, [simResults, simTime, faults, graph.nodes]);
@@ -286,24 +290,52 @@ export default function App() {
     addLog(`Decommissioned Substation: ${id}`);
   };
 
-  const handleInjectFault = (id: string) => {
+  const recalculateSimulation = (currentFaults: FaultTask[], newFaults: FaultTask[]) => {
+    const combinedFaults = [...currentFaults, ...newFaults];
+    setFaults(combinedFaults);
+    
+    // Spawn crews at depots
+    const depots = graph.nodes.filter(n => n.type === 'depot');
+    const crews: Crew[] = depots.map((d, i) => ({
+      id: `c${i + 1}`,
+      name: `Crew ${d.name || d.id}`,
+      busy: false,
+      startNodeId: d.id
+    }));
+    
+    if (crews.length === 0) {
+      crews.push({ id: 'c1', name: 'Emergency Crew', busy: false, startNodeId: graph.nodes[0].id });
+    }
+
+    const results = simulateDispatch(graph, combinedFaults, crews);
+    setSimResults({ gantt: results.gantt, updatedFaults: results.updatedFaults, crews });
+  };
+
+  const handleInjectFault = (id: string, isCritical: boolean = false) => {
     const node = graph.nodes.find(n => n.id === id);
     if (!node || node.type === 'depot') {
       addLog("PROTECTED: Depots cannot be faulted.");
       return;
     }
 
+    const isSimulating = mode === 'simulate';
+    const arrival = isSimulating ? simTime : faults.length * 2;
+    // Boost severity if it's explicitly 'critical' or a hospital
     const newFault: FaultTask = {
       id: `task-${Date.now()}`,
       substationId: id,
-      severity: node.type === 'hospital' ? 10 : 5,
-      arrivalTime: faults.length * 2,
+      severity: isCritical ? 20 : (node.type === 'hospital' ? 10 : 5),
+      arrivalTime: arrival,
       burstTime: 5 + Math.floor(Math.random() * 5),
       remainingTime: 0,
     };
 
-    setFaults(prev => [...prev, newFault]);
-    addLog(`CRITICAL ALERT: Fault detected at ${node.name}! Severity: ${newFault.severity}`);
+    if (isSimulating) {
+      recalculateSimulation(faults, [newFault]);
+    } else {
+      setFaults(prev => [...prev, newFault]);
+    }
+    addLog(`${isCritical ? 'CRITICAL ' : ''}ALERT: Fault detected at ${node.name}! Severity: ${newFault.severity}`);
   };
 
   const handleNodePositionChange = (id: string, x: number, y: number) => {
@@ -494,14 +526,20 @@ export default function App() {
                     </button>
                   </div>
                 </div>
-                <div className="grid grid-cols-1 gap-2">
+                <div className="grid grid-cols-2 gap-2">
                   <button 
-                    onClick={() => handleInjectFault(selectedNodeId)}
-                    className="w-full py-2 bg-gradient-to-r from-orange-500 to-red-500 text-white text-[10px] font-black uppercase tracking-widest rounded hover:from-orange-400 hover:to-red-400 transition-all shadow-sm"
+                    onClick={() => handleInjectFault(selectedNodeId, false)}
+                    className="w-full py-2 bg-slate-100 border border-slate-300 text-slate-700 text-[9px] font-black uppercase tracking-widest rounded hover:bg-slate-200 transition-all shadow-sm"
                   >
-                    Inject Fault
+                    Standard Fault
                   </button>
-                  <p className="text-[9px] text-slate-500 text-center italic">
+                  <button 
+                    onClick={() => handleInjectFault(selectedNodeId, true)}
+                    className="w-full py-2 bg-gradient-to-r from-orange-500 to-red-500 text-white text-[9px] font-black uppercase tracking-widest rounded hover:from-orange-400 hover:to-red-400 transition-all shadow-sm"
+                  >
+                    Critical Fault
+                  </button>
+                  <p className="col-span-2 text-[9px] text-slate-500 text-center italic mt-1">
                     Tip: Select another node to bridge a connection.
                   </p>
                 </div>
@@ -580,12 +618,20 @@ export default function App() {
                     );
                   } else {
                     return (
-                      <button 
-                        onClick={() => handleInjectFault(selectedNodeId)}
-                        className="w-full py-3 bg-gradient-to-r from-orange-500 to-red-500 text-white text-[10px] font-black uppercase tracking-widest rounded hover:from-orange-400 hover:to-red-400 transition-all shadow-sm"
-                      >
-                        Inject Fault Here
-                      </button>
+                      <div className="grid grid-cols-2 gap-2">
+                        <button 
+                          onClick={() => handleInjectFault(selectedNodeId, false)}
+                          className="w-full py-3 bg-slate-100 border border-slate-300 text-slate-700 text-[9px] font-black uppercase tracking-widest rounded hover:bg-slate-200 transition-all shadow-sm"
+                        >
+                          Stand. Fault
+                        </button>
+                        <button 
+                          onClick={() => handleInjectFault(selectedNodeId, true)}
+                          className="w-full py-3 bg-gradient-to-r from-orange-500 to-red-500 text-white text-[9px] font-black uppercase tracking-widest rounded hover:from-orange-400 hover:to-red-400 transition-all shadow-sm"
+                        >
+                          Crit. Fault
+                        </button>
+                      </div>
                     );
                   }
                 })()}
@@ -629,19 +675,46 @@ export default function App() {
               <button 
                 onClick={() => {
                   setGraph({ nodes: INITIAL_NODES, edges: INITIAL_EDGES });
-                  // Inject 3 faults 
-                  const demoFaults: FaultTask[] = [
-                    { id: 'f1', substationId: 'h1', severity: 20, arrivalTime: 0, burstTime: 6, remainingTime: 6 },
-                    { id: 'f2', substationId: 'r4', severity: 10, arrivalTime: 1, burstTime: 4, remainingTime: 4 },
-                    { id: 'f3', substationId: 'i4', severity: 10, arrivalTime: 2, burstTime: 8, remainingTime: 8 },
-                  ];
-                  setFaults(demoFaults);
-                  addLog("DEMO: 3 simultaneous faults injected across Grid.");
+                  // Inject 3 random faults generator
+                  const validNodes = INITIAL_NODES.filter(n => n.type !== 'depot');
+                  const shuffled = [...validNodes].sort(() => 0.5 - Math.random());
+                  const targets = shuffled.slice(0, 3);
+                  
+                  const demoFaults: FaultTask[] = targets.map((node, i) => ({
+                    id: `f${Date.now()}-${i}`,
+                    substationId: node.id,
+                    severity: node.type === 'hospital' ? 20 : (Math.floor(Math.random() * 10) + 5),
+                    arrivalTime: i, // slightly staggered or could be 0
+                    burstTime: 4 + Math.floor(Math.random() * 6),
+                    remainingTime: 0,
+                  })).map(f => ({ ...f, remainingTime: f.burstTime }));
+                  
+                  if (mode === 'simulate') {
+                    // Spawn crews at depots based on INITIAL_NODES
+                    const depots = INITIAL_NODES.filter(n => n.type === 'depot');
+                    const crews: Crew[] = depots.map((d, i) => ({
+                      id: `c${i + 1}`,
+                      name: `Crew ${d.name || d.id}`,
+                      busy: false,
+                      startNodeId: d.id
+                    }));
+                    if (crews.length === 0) {
+                      crews.push({ id: 'c1', name: 'Emergency Crew', busy: false, startNodeId: INITIAL_NODES[0].id });
+                    }
+                    const simGraph = { nodes: INITIAL_NODES, edges: INITIAL_EDGES };
+                    const results = simulateDispatch(simGraph, demoFaults, crews);
+                    setFaults(demoFaults);
+                    setSimResults({ gantt: results.gantt, updatedFaults: results.updatedFaults, crews });
+                  } else {
+                    setFaults(demoFaults);
+                  }
+                  
+                  addLog("DEMO: 3 random simultaneous faults injected across Grid.");
                 }}
                 className="col-span-2 py-2 bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-600 transition-all font-bold uppercase tracking-widest text-[9px] rounded flex items-center justify-center gap-2"
               >
                 <Database className="w-3 h-3" />
-                Inject 3x Simultaneous Demo
+                Inject 3x Random Demo
               </button>
             </div>
           </section>
@@ -673,7 +746,6 @@ export default function App() {
               graph={graph}
               onNodeClick={handleNodeClick}
               faultNodeIds={faults.map(f => f.substationId)}
-              shortestPath={shortestPath}
               affectedZones={affectedZones}
               isBuilderMode={mode === 'build'}
               selectedBuilderSource={selectedNodeId}
@@ -722,11 +794,7 @@ export default function App() {
                     <SchedulerUI 
                       gantt={simResults.gantt}
                       faults={simResults.updatedFaults}
-                      crews={[
-                        { id: 'c1', name: 'Alpha-01', busy: false },
-                        { id: 'c2', name: 'Beta-02', busy: false },
-                        { id: 'c3', name: 'Gamma-03', busy: false },
-                      ]}
+                      crews={simResults.crews || []}
                       currentTime={simTime}
                     />
                     <div className="grid grid-cols-3 gap-6">

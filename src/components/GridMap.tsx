@@ -10,12 +10,12 @@ export interface ActiveCrew {
   x?: number;
   y?: number;
   isWorking: boolean;
+  currentPath?: string[];
 }
 
 interface GridMapProps {
   graph: Graph;
   faultNodeIds?: string[];
-  shortestPath?: string[];
   affectedZones?: string[];
   onNodeClick: (nodeId: string) => void;
   isBuilderMode?: boolean;
@@ -26,7 +26,7 @@ interface GridMapProps {
   activeCrews?: ActiveCrew[];
 }
 
-const GridMap: React.FC<GridMapProps> = ({ graph, faultNodeIds, shortestPath, affectedZones, onNodeClick, isBuilderMode, onBgClick, onNodeRightClick, selectedBuilderSource, onNodePositionChange, activeCrews }) => {
+const GridMap: React.FC<GridMapProps> = ({ graph, faultNodeIds, affectedZones, onNodeClick, isBuilderMode, onBgClick, onNodeRightClick, selectedBuilderSource, onNodePositionChange, activeCrews }) => {
   const svgRef = useRef<SVGSVGElement>(null);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [draggedNode, setDraggedNode] = useState<string | null>(null);
@@ -54,23 +54,11 @@ const GridMap: React.FC<GridMapProps> = ({ graph, faultNodeIds, shortestPath, af
     }
   };
 
-  const getPathEdges = () => {
-    if (!shortestPath) return [];
-    const edges: string[] = [];
-    for (let i = 0; i < shortestPath.length - 1; i++) {
-      edges.push(`${shortestPath[i]}-${shortestPath[i+1]}`);
-      edges.push(`${shortestPath[i+1]}-${shortestPath[i]}`);
-    }
-    return edges;
-  };
-
-  const pathEdges = useMemo(getPathEdges, [shortestPath]);
-
   const [hoverPointer, setHoverPointer] = useState<{ x: number; y: number } | null>(null);
   const [nodeDragTravel, setNodeDragTravel] = useState(0);
 
   const handlePointerDown = (e: React.PointerEvent) => {
-    if (e.button !== 0 || !isBuilderMode) return;
+    if (e.button !== 0) return;
     
     // If clicking on SVG bg (not a node)
     if (e.target === svgRef.current) {
@@ -84,15 +72,15 @@ const GridMap: React.FC<GridMapProps> = ({ graph, faultNodeIds, shortestPath, af
   };
 
   const handlePointerMove = (e: React.PointerEvent) => {
-    if (!isBuilderMode) return;
-    
     let localX = 0;
     let localY = 0;
     if (svgRef.current) {
       const rect = svgRef.current.getBoundingClientRect();
       localX = e.clientX - rect.left - pan.x;
       localY = e.clientY - rect.top - pan.y;
-      setHoverPointer({ x: localX, y: localY });
+      if (isBuilderMode) {
+        setHoverPointer({ x: localX, y: localY });
+      }
     }
     
     if (isPanning && lastPointer) {
@@ -101,7 +89,7 @@ const GridMap: React.FC<GridMapProps> = ({ graph, faultNodeIds, shortestPath, af
       setPanTravel(prev => prev + Math.abs(dx) + Math.abs(dy));
       setPan(prev => ({ x: prev.x + dx, y: prev.y + dy }));
       setLastPointer({ x: e.clientX, y: e.clientY });
-    } else if (draggedNode && onNodePositionChange && svgRef.current && lastPointer) {
+    } else if (draggedNode && isBuilderMode && onNodePositionChange && svgRef.current && lastPointer) {
       const dx = e.clientX - lastPointer.x;
       const dy = e.clientY - lastPointer.y;
       setNodeDragTravel(prev => prev + Math.abs(dx) + Math.abs(dy));
@@ -148,7 +136,7 @@ const GridMap: React.FC<GridMapProps> = ({ graph, faultNodeIds, shortestPath, af
         ref={svgRef} 
         width="100%" 
         height="100%" 
-        className={`touch-none bg-[radial-gradient(#cbd5e1_1px,transparent_1px)] [background-size:40px_40px] ${isPanning ? 'cursor-grabbing' : isBuilderMode ? 'cursor-crosshair' : ''}`}
+        className={`touch-none bg-[radial-gradient(#cbd5e1_1px,transparent_1px)] [background-size:40px_40px] ${isPanning ? 'cursor-grabbing' : isBuilderMode ? 'cursor-crosshair' : 'cursor-grab'}`}
         style={{ backgroundPosition: `${pan.x}px ${pan.y}px` }}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
@@ -187,8 +175,7 @@ const GridMap: React.FC<GridMapProps> = ({ graph, faultNodeIds, shortestPath, af
 
           if (!sourceNode || !targetNode) return null;
 
-          const isPath = pathEdges.includes(`${sourceNode.id}-${targetNode.id}`);
-          const isAffectedEdge = !isPath && affectedZones?.includes(sourceNode.id) && affectedZones?.includes(targetNode.id);
+          const isAffectedEdge = affectedZones?.includes(sourceNode.id) && affectedZones?.includes(targetNode.id);
           
           return (
             <g key={`edge-${sourceNode.id}-${targetNode.id}-${i}`}>
@@ -197,23 +184,23 @@ const GridMap: React.FC<GridMapProps> = ({ graph, faultNodeIds, shortestPath, af
                 y1={sourceNode.y}
                 x2={targetNode.x}
                 y2={targetNode.y}
-                stroke={isPath ? '#22c55e' : isAffectedEdge ? '#f97316' : '#cbd5e1'}
-                strokeWidth={isPath ? 6 : isAffectedEdge ? 4 : 3}
-                opacity={isPath ? 0.9 : isAffectedEdge ? 0.8 : 0.6}
+                stroke={isAffectedEdge ? '#f97316' : '#cbd5e1'}
+                strokeWidth={isAffectedEdge ? 4 : 3}
+                opacity={isAffectedEdge ? 0.8 : 0.6}
                 strokeLinecap="round"
               />
               {/* Animated dash line overlay */}
-              {(isPath || isAffectedEdge) && (
+              {isAffectedEdge && (
                 <line
                   x1={sourceNode.x}
                   y1={sourceNode.y}
                   x2={targetNode.x}
                   y2={targetNode.y}
-                  stroke={isPath ? '#ffffff' : '#ffedd5'}
-                  strokeWidth={isPath ? 3 : 2}
-                  strokeDasharray={isAffectedEdge ? "4, 8" : "6, 12"}
-                  opacity={isPath ? 1 : 0.8}
-                  className={isPath ? 'animate-flow-fast' : 'animate-flow-slow'}
+                  stroke="#ffedd5"
+                  strokeWidth={2}
+                  strokeDasharray="4, 8"
+                  opacity={0.8}
+                  className="animate-flow-slow"
                   strokeLinecap="round"
                 />
               )}
@@ -221,11 +208,50 @@ const GridMap: React.FC<GridMapProps> = ({ graph, faultNodeIds, shortestPath, af
           );
         })}
 
-          {/* Nodes */}
+          {/* Crew Paths */}
+        {activeCrews?.map(crew => {
+          if (!crew.currentPath || crew.currentPath.length < 2) return null;
+          
+          const points = crew.currentPath.map(nodeId => {
+            const node = graph.nodes.find(n => n.id === nodeId);
+            return node ? `${node.x},${node.y}` : '';
+          }).filter(Boolean).join(' ');
+
+          // Map crew id to color hue
+          const hue = parseInt((crew.id || '').replace(/\D/g, '') || '0') * 137.5 % 360;
+          const crewColor = `hsla(${hue}, 80%, 50%, 0.8)`;
+          const crewStrokeId = (crew.id || '').replace(/\D/g, '');
+
+          return (
+            <g key={`path-${crew.id}`}>
+              <polyline
+                points={points}
+                fill="none"
+                stroke={crewColor}
+                strokeWidth="6"
+                opacity="0.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+              <polyline
+                points={points}
+                fill="none"
+                stroke="#ffffff"
+                strokeWidth="2"
+                strokeDasharray="4, 8"
+                opacity="0.9"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className={`animate-flow-fast`}
+              />
+            </g>
+          );
+        })}
+
+        {/* Nodes */}
           {graph.nodes.map((node) => {
           const isFault = faultNodeIds?.includes(node.id);
           const isAffected = affectedZones?.includes(node.id);
-          const isPath = shortestPath?.includes(node.id);
           const isSelectedSrc = isBuilderMode && selectedBuilderSource === node.id;
 
           return (
@@ -276,8 +302,8 @@ const GridMap: React.FC<GridMapProps> = ({ graph, faultNodeIds, shortestPath, af
               <circle
                 r="18"
                 fill="#ffffff"
-                stroke={isFault ? '#ef4444' : isAffected ? '#f97316' : isPath ? '#22c55e' : isSelectedSrc ? '#3b82f6' : getNodeColor(node.type)}
-                strokeWidth={isSelectedSrc ? "3" : isFault || isAffected || isPath ? "3" : "2"}
+                stroke={isFault ? '#ef4444' : isAffected ? '#f97316' : isSelectedSrc ? '#3b82f6' : getNodeColor(node.type)}
+                strokeWidth={isSelectedSrc ? "3" : isFault || isAffected ? "3" : "2"}
                 strokeDasharray={isSelectedSrc ? "4,2" : "0"}
                 style={{ filter: 'url(#shadow)' }}
                 className="transition-all duration-300"
@@ -292,7 +318,7 @@ const GridMap: React.FC<GridMapProps> = ({ graph, faultNodeIds, shortestPath, af
                 y="34"
                 textAnchor="middle"
                 className="text-[10px] font-mono select-none font-bold"
-                fill={isFault ? '#ef4444' : isAffected ? '#f97316' : isPath ? '#22c55e' : isSelectedSrc ? '#3b82f6' : '#475569'}
+                fill={isFault ? '#ef4444' : isAffected ? '#f97316' : isSelectedSrc ? '#3b82f6' : '#475569'}
                 style={{ pointerEvents: 'none' }}
               >
                 {node.name}

@@ -162,81 +162,138 @@ export function simulateDispatch(
   const gantt: GanttEntry[] = [];
   const completedFaults: FaultTask[] = [];
   
-  // Track where each crew is and when they are available next
-  const crewState = new Map<string, { availableAt: number; currentNode: string }>();
+  const crewState = new Map<string, { availableAt: number; currentNode: string; id: string }>();
   crews.forEach(c => {
     crewState.set(c.id, { 
       availableAt: 0, 
-      currentNode: c.startNodeId || graph.nodes[0].id 
+      currentNode: c.startNodeId || graph.nodes[0].id,
+      id: c.id
     });
   });
 
-  // Sort faults by arrival time
-  const pendingFaults = [...faults].sort((a, b) => a.arrivalTime - b.arrivalTime);
-  // Optional priority sort (severity 1 is higher priority if arrived at same time)
+  const TRAVEL_TIME_PER_EDGE = 2;
+  const pendingFaults = [...faults].map(f => ({ ...f }));
+  let currentTime = 0;
 
-  const TRAVEL_TIME_PER_EDGE = 2; // Arbitrary time units per edge
+  while (completedFaults.length < faults.length) {
+    // Find who is the next earliest available crew
+    const sortedCrews = Array.from(crewState.values()).sort((a, b) => a.availableAt - b.availableAt);
+    const nextCrewTime = sortedCrews[0].availableAt;
+    
+    // Time jumps to the earliest crew available, or next fault arrival IF all crews are idle and waiting
+    let timeJump = nextCrewTime;
 
-  for (const fault of pendingFaults) {
-    let bestCrew = crews[0];
-    let earliestArrivalAtFault = Infinity;
-    let selectedPath: string[] | null = null;
-    let selectedDepartureTime = 0;
-
-    // Find which crew can arrive and fix it earliest
-    // Or simpler: Assign task to the crew that has the shortest wait + travel + execution time
-    for (const crew of crews) {
-      const state = crewState.get(crew.id)!;
-      const tOut = findShortestPathBFS(graph, state.currentNode, fault.substationId);
-      const path = tOut.path || [state.currentNode]; // If no path, teleport (fallback)
-      const travelTime = (path.length - 1) * TRAVEL_TIME_PER_EDGE;
-      
-      // Crew can start traveling either when they finish previous tasks, or when fault arrives
-      const departureTime = Math.max(state.availableAt, fault.arrivalTime);
-      const arrivalAtFault = departureTime + travelTime;
-
-      if (arrivalAtFault < earliestArrivalAtFault) {
-        earliestArrivalAtFault = arrivalAtFault;
-        bestCrew = crew;
-        selectedPath = path;
-        selectedDepartureTime = departureTime;
+    // Available faults at this time jump
+    let availableFaults = pendingFaults.filter(f => f.arrivalTime <= timeJump && !completedFaults.find(cf => cf.id === f.id));
+    
+    if (availableFaults.length === 0) {
+      // Find the next fault that will arrive
+      const futureFaults = pendingFaults.filter(f => !completedFaults.find(cf => cf.id === f.id)).sort((a, b) => a.arrivalTime - b.arrivalTime);
+      if (futureFaults.length > 0) {
+        timeJump = Math.max(timeJump, futureFaults[0].arrivalTime);
+        availableFaults = pendingFaults.filter(f => f.arrivalTime <= timeJump && !completedFaults.find(cf => cf.id === f.id));
+      } else {
+        break; // Should not happen if loop condition holds
       }
     }
 
-    const state = crewState.get(bestCrew.id)!;
-    const travelTime = (selectedPath!.length - 1) * TRAVEL_TIME_PER_EDGE;
-    
-    // Add travel entry to Gantt if travel is needed
-    if (travelTime > 0) {
+    currentTime = timeJump;
+
+    // Available crews AT this current time
+    const availableCrews = sortedCrews.filter(c => c.availableAt <= currentTime);
+
+    // Sort available faults by Severity (Highest first), then Arrival Time (Earliest first)
+    availableFaults.sort((a, b) => {
+      if (a.severity !== b.severity) return b.severity - a.severity;
+      return a.arrivalTime - b.arrivalTime;
+    });
+
+    if (availableCrews.length > 0 && availableFaults.length > 0) {
+      const fault = availableFaults[0];
+      let bestCrew = availableCrews[0];
+      let earliestArrivalAtFault = Infinity;
+      let selectedPath: string[] | null = null;
+      let selectedDepartureTime = 0;
+
+      for (const crew of availableCrews) {
+        const tOut = findShortestPathBFS(graph, crew.currentNode, fault.substationId);
+        const path = tOut.path || [crew.currentNode];
+        const travelTime = (path.length - 1) * TRAVEL_TIME_PER_EDGE;
+        
+        const departureTime = Math.max(crew.availableAt, fault.arrivalTime);
+        const arrivalAtFault = departureTime + travelTime;
+
+        if (arrivalAtFault < earliestArrivalAtFault) {
+          earliestArrivalAtFault = arrivalAtFault;
+          bestCrew = crew;
+          selectedPath = path;
+          selectedDepartureTime = departureTime;
+        }
+      }
+
+      const state = crewState.get(bestCrew.id)!;
+      const travelTime = (selectedPath!.length - 1) * TRAVEL_TIME_PER_EDGE;
+      
+      if (travelTime > 0) {
+        gantt.push({
+          crewId: bestCrew.id,
+          taskId: fault.id,
+          type: 'travel',
+          path: selectedPath!,
+          start: selectedDepartureTime,
+          end: selectedDepartureTime + travelTime
+        });
+      }
+
+      const fixStart = selectedDepartureTime + Math.max(travelTime, 0);
+      const fixEnd = fixStart + fault.burstTime;
+
       gantt.push({
         crewId: bestCrew.id,
         taskId: fault.id,
-        type: 'travel',
-        path: selectedPath!,
-        start: selectedDepartureTime,
-        end: selectedDepartureTime + travelTime
+        type: 'repair',
+        path: [fault.substationId],
+        start: fixStart,
+        end: fixEnd
+      });
+
+      state.availableAt = fixEnd;
+      state.currentNode = fault.substationId;
+      
+      fault.completionTime = fixEnd;
+      fault.waitingTime = fixEnd - fault.arrivalTime - fault.burstTime;
+      fault.remainingTime = 0;
+      completedFaults.push(fault);
+    } else {
+      // If no valid matches, advance time slightly to prevent infinite loop
+      currentTime++;
+      sortedCrews.forEach(c => {
+         if(c.availableAt < currentTime) c.availableAt = currentTime;
       });
     }
+  }
 
-    const fixStart = selectedDepartureTime + Math.max(travelTime, 0);
-    const fixEnd = fixStart + fault.burstTime;
-
-    gantt.push({
-      crewId: bestCrew.id,
-      taskId: fault.id,
-      type: 'repair',
-      path: [fault.substationId], // at node
-      start: fixStart,
-      end: fixEnd
-    });
-
-    state.availableAt = fixEnd;
-    state.currentNode = fault.substationId; // Crew stays at the repaired node
-    
-    fault.completionTime = fixEnd;
-    fault.waitingTime = fixEnd - fault.arrivalTime - fault.burstTime;
-    fault.remainingTime = 0;
-    completedFaults.push({ ...fault });
+  // Make crews return to their start node (depot)
+  for (const crew of crews) {
+    const state = crewState.get(crew.id)!;
+    const startNode = crew.startNodeId || graph.nodes[0].id;
+    if (state.currentNode !== startNode) {
+      const tOut = findShortestPathBFS(graph, state.currentNode, startNode);
+      const path = tOut.path;
+      if (path && path.length > 1) {
+        const travelTime = (path.length - 1) * TRAVEL_TIME_PER_EDGE;
+        gantt.push({
+          crewId: crew.id,
+          taskId: 'ret',
+          type: 'travel',
+          path: path,
+          start: state.availableAt,
+          end: state.availableAt + travelTime
+        });
+        state.availableAt += travelTime;
+        state.currentNode = startNode;
+      }
+    }
   }
 
   return { gantt, updatedFaults: completedFaults };
