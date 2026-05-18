@@ -141,93 +141,102 @@ export interface Crew {
   id: string;
   name: string;
   busy: boolean;
+  startNodeId?: string;
   currentTaskId?: string;
 }
 
 export interface GanttEntry {
   crewId: string;
   taskId: string;
+  type: 'travel' | 'repair';
+  path?: string[];
   start: number;
   end: number;
 }
 
-export function simulateRoundRobin(
+export function simulateDispatch(
+  graph: Graph,
   faults: FaultTask[],
-  crews: Crew[],
-  quantum: number = 2
+  crews: Crew[]
 ): { gantt: GanttEntry[]; updatedFaults: FaultTask[] } {
-  let currentTime = 0;
-  const queue: FaultTask[] = [...faults].sort((a, b) => a.arrivalTime - b.arrivalTime);
   const gantt: GanttEntry[] = [];
-  const readyQueue: FaultTask[] = [];
   const completedFaults: FaultTask[] = [];
   
-  // Clone to avoid mutation
-  const activeFaults = queue.map(f => ({ ...f, remainingTime: f.burstTime }));
-
-  while (completedFaults.length < activeFaults.length) {
-    // Add arrived faults to ready queue
-    activeFaults.forEach(f => {
-      if (f.arrivalTime <= currentTime && f.remainingTime > 0 && !readyQueue.includes(f) && !completedFaults.includes(f)) {
-        readyQueue.push(f);
-      }
+  // Track where each crew is and when they are available next
+  const crewState = new Map<string, { availableAt: number; currentNode: string }>();
+  crews.forEach(c => {
+    crewState.set(c.id, { 
+      availableAt: 0, 
+      currentNode: c.startNodeId || graph.nodes[0].id 
     });
+  });
 
-    // Priority execution: highest severity (1 highest priority, 2, 3.. or opposite? let's assume severity 3 is high priority, meaning higher number = jump queue)
-    // Wait, standard convention: severity 1 = highest. Let's sort ready queue so severity 1 is processed first, but since it's Round Robin, we just prioritize pulling them!
-    readyQueue.sort((a, b) => {
-      if (a.severity !== b.severity) {
-        return a.severity - b.severity; // smaller severity = higher priority
-      }
-      return 0; // keep order for same severity
-    });
+  // Sort faults by arrival time
+  const pendingFaults = [...faults].sort((a, b) => a.arrivalTime - b.arrivalTime);
+  // Optional priority sort (severity 1 is higher priority if arrived at same time)
 
-    if (readyQueue.length === 0) {
-      currentTime++;
-      continue;
-    }
+  const TRAVEL_TIME_PER_EDGE = 2; // Arbitrary time units per edge
 
-    const currentTask = readyQueue.shift()!;
-    if (currentTask.startTime === undefined) {
-      currentTask.startTime = currentTime;
-    }
-
-    const timeToRun = Math.min(currentTask.remainingTime, quantum);
-    
-    // In a real multi-crew scenario, we'd distribute across crews.
-    // Ensure we pick a crew based on shortest Gantt end time to pack efficiently!
+  for (const fault of pendingFaults) {
     let bestCrew = crews[0];
-    let earliestAvailable = Infinity;
-    crews.forEach(c => {
-       const crewEntries = gantt.filter(g => g.crewId === c.id);
-       const avail = crewEntries.length > 0 ? Math.max(...crewEntries.map(e => e.end)) : 0;
-       if (avail < earliestAvailable) {
-         earliestAvailable = avail;
-         bestCrew = c;
-       }
-    });
+    let earliestArrivalAtFault = Infinity;
+    let selectedPath: string[] | null = null;
+    let selectedDepartureTime = 0;
 
-    // We can only start when the best crew is available AND time has progressed to current
-    const actualStart = Math.max(currentTime, earliestAvailable);
+    // Find which crew can arrive and fix it earliest
+    // Or simpler: Assign task to the crew that has the shortest wait + travel + execution time
+    for (const crew of crews) {
+      const state = crewState.get(crew.id)!;
+      const tOut = findShortestPathBFS(graph, state.currentNode, fault.substationId);
+      const path = tOut.path || [state.currentNode]; // If no path, teleport (fallback)
+      const travelTime = (path.length - 1) * TRAVEL_TIME_PER_EDGE;
+      
+      // Crew can start traveling either when they finish previous tasks, or when fault arrives
+      const departureTime = Math.max(state.availableAt, fault.arrivalTime);
+      const arrivalAtFault = departureTime + travelTime;
+
+      if (arrivalAtFault < earliestArrivalAtFault) {
+        earliestArrivalAtFault = arrivalAtFault;
+        bestCrew = crew;
+        selectedPath = path;
+        selectedDepartureTime = departureTime;
+      }
+    }
+
+    const state = crewState.get(bestCrew.id)!;
+    const travelTime = (selectedPath!.length - 1) * TRAVEL_TIME_PER_EDGE;
+    
+    // Add travel entry to Gantt if travel is needed
+    if (travelTime > 0) {
+      gantt.push({
+        crewId: bestCrew.id,
+        taskId: fault.id,
+        type: 'travel',
+        path: selectedPath!,
+        start: selectedDepartureTime,
+        end: selectedDepartureTime + travelTime
+      });
+    }
+
+    const fixStart = selectedDepartureTime + Math.max(travelTime, 0);
+    const fixEnd = fixStart + fault.burstTime;
 
     gantt.push({
       crewId: bestCrew.id,
-      taskId: currentTask.id,
-      start: actualStart,
-      end: actualStart + timeToRun
+      taskId: fault.id,
+      type: 'repair',
+      path: [fault.substationId], // at node
+      start: fixStart,
+      end: fixEnd
     });
 
-    // The dispatch engine proceeds by actual time
-    currentTime = actualStart + timeToRun;
-    currentTask.remainingTime -= timeToRun;
-
-    if (currentTask.remainingTime > 0) {
-      // It will be re-added in next tick
-    } else {
-      currentTask.completionTime = currentTime;
-      currentTask.waitingTime = currentTask.completionTime - currentTask.arrivalTime - currentTask.burstTime;
-      completedFaults.push(currentTask);
-    }
+    state.availableAt = fixEnd;
+    state.currentNode = fault.substationId; // Crew stays at the repaired node
+    
+    fault.completionTime = fixEnd;
+    fault.waitingTime = fixEnd - fault.arrivalTime - fault.burstTime;
+    fault.remainingTime = 0;
+    completedFaults.push({ ...fault });
   }
 
   return { gantt, updatedFaults: completedFaults };

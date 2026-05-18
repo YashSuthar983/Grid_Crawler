@@ -35,7 +35,7 @@ import {
   Edge, 
   findShortestPath, 
   findAffectedZones, 
-  simulateRoundRobin, 
+  simulateDispatch, 
   FaultTask, 
   Crew, 
   GanttEntry,
@@ -45,24 +45,76 @@ import {
 import { ActiveCrew } from './components/GridMap';
 
 const INITIAL_NODES: Node[] = [
-  { id: '1', name: 'Alpha Depot', type: 'depot', x: 120, y: 120 },
-  { id: '2', name: 'Beta Depot', type: 'depot', x: 600, y: 120 },
-  { id: '3', name: 'City Hospital', type: 'hospital', x: 360, y: 240 },
-  { id: '4', name: 'Res-A', type: 'residential', x: 240, y: 360 },
-  { id: '5', name: 'Ind-B', type: 'industrial', x: 480, y: 360 },
+  // DEPOTS
+  { id: 'd1', name: 'West Depot', type: 'depot', x: 150, y: 150 },
+  { id: 'd2', name: 'East Depot', type: 'depot', x: 800, y: 150 },
+  { id: 'd3', name: 'South Depot', type: 'depot', x: 475, y: 550 },
+
+  // HOSPITALS
+  { id: 'h1', name: 'Central Hospital', type: 'hospital', x: 475, y: 250 },
+  { id: 'h2', name: 'East Med Center', type: 'hospital', x: 800, y: 350 },
+
+  // RESIDENTIAL ZONES
+  { id: 'r1', name: 'North West Res', type: 'residential', x: 300, y: 150 },
+  { id: 'r2', name: 'West Suburbs', type: 'residential', x: 250, y: 300 },
+  { id: 'r3', name: 'Downtown Living', type: 'residential', x: 350, y: 350 },
+  { id: 'r4', name: 'East Side Res', type: 'residential', x: 650, y: 250 },
+  { id: 'r5', name: 'South East Res', type: 'residential', x: 700, y: 450 },
+  { id: 'r6', name: 'South West Res', type: 'residential', x: 300, y: 450 },
+
+  // INDUSTRIAL ZONES
+  { id: 'i1', name: 'North Ind Park', type: 'industrial', x: 600, y: 150 },
+  { id: 'i2', name: 'Far West Plant', type: 'industrial', x: 100, y: 350 },
+  { id: 'i3', name: 'East Tech Hub', type: 'industrial', x: 850, y: 250 },
+  { id: 'i4', name: 'Central Power', type: 'industrial', x: 550, y: 400 },
 ];
 
 const INITIAL_EDGES: Edge[] = [
-  { source: '1', target: '4' },
-  { source: '4', target: '3' },
-  { source: '2', target: '5' },
+  // Connect D1
+  { source: 'd1', target: 'r1' },
+  { source: 'd1', target: 'r2' },
+  { source: 'd1', target: 'i2' },
+  
+  // Connect D2
+  { source: 'd2', target: 'i1' },
+  { source: 'd2', target: 'r4' },
+  { source: 'd2', target: 'i3' },
+
+  // Connect D3
+  { source: 'd3', target: 'r6' },
+  { source: 'd3', target: 'i4' },
+  { source: 'd3', target: 'r5' },
+
+  // Connect Hospitals
+  { source: 'h1', target: 'r1' },
+  { source: 'h1', target: 'r3' },
+  { source: 'h1', target: 'r4' },
+  { source: 'h1', target: 'i1' },
+  
+  { source: 'h2', target: 'i3' },
+  { source: 'h2', target: 'r5' },
+  { source: 'h2', target: 'i4' },
+
+  // Cross Connections
+  { source: 'r2', target: 'i2' },
+  { source: 'r2', target: 'r6' },
+  { source: 'r2', target: 'r3' },
+  
+  { source: 'r3', target: 'r6' },
+  { source: 'r3', target: 'i4' },
+  
+  { source: 'r4', target: 'i4' },
+  { source: 'r4', target: 'h2' },
+  { source: 'r4', target: 'i3' },
+  
+  { source: 'r5', target: 'i4' },
 ];
 
 export default function App() {
   const [graph, setGraph] = useState<Graph>({ nodes: INITIAL_NODES, edges: INITIAL_EDGES });
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [faults, setFaults] = useState<FaultTask[]>([]);
-  const [simResults, setSimResults] = useState<{ gantt: GanttEntry[]; updatedFaults: FaultTask[] } | null>(null);
+  const [simResults, setSimResults] = useState<{ gantt: GanttEntry[]; updatedFaults: FaultTask[]; crews?: Crew[] } | null>(null);
   const [mode, setMode] = useState<'build' | 'simulate'>('build');
   const [selectedBuildingType, setSelectedBuildingType] = useState<Node['type']>('residential');
   const [logs, setLogs] = useState<string[]>(["[SYSTEM] Booting PacketPath Sequencer...", "[SYSTEM] Grid connection: SECURE"]);
@@ -71,33 +123,70 @@ export default function App() {
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
 
   const activeCrews = useMemo<ActiveCrew[]>(() => {
-    if (!simResults) return [];
-    const crews = [
-      { id: 'c1', name: 'Alpha-01' },
-      { id: 'c2', name: 'Beta-02' },
-      { id: 'c3', name: 'Gamma-03' },
-    ];
+    if (!simResults || !simResults.crews) return [];
     
-    return crews.map(crew => {
+    return simResults.crews.map(crew => {
       // Find the active task for this crew at current simTime
       const activeTask = simResults.gantt.find(
         g => g.crewId === crew.id && simTime >= g.start && simTime < g.end
       );
       
-      let nodeId = null;
+      let x: number | undefined;
+      let y: number | undefined;
+      let nodeId: string | null = null;
+      let isWorking = false;
+      
       if (activeTask) {
-        const fault = faults.find(f => f.id === activeTask.taskId);
-        if (fault) nodeId = fault.substationId;
+        if (activeTask.type === 'travel' && activeTask.path) {
+          // Interpolate along the path
+          const progress = (simTime - activeTask.start) / (activeTask.end - activeTask.start);
+          const totalEdges = activeTask.path.length - 1;
+          const currentEdgeIndex = Math.min(Math.floor(progress * totalEdges), totalEdges - 1);
+          const edgeProgress = (progress * totalEdges) - currentEdgeIndex;
+          
+          if (totalEdges > 0) {
+            const startNode = graph.nodes.find(n => n.id === activeTask.path![currentEdgeIndex]);
+            const endNode = graph.nodes.find(n => n.id === activeTask.path![currentEdgeIndex + 1]);
+            if (startNode && endNode && startNode.x !== undefined && startNode.y !== undefined && endNode.x !== undefined && endNode.y !== undefined) {
+              x = startNode.x + (endNode.x - startNode.x) * edgeProgress;
+              y = startNode.y + (endNode.y - startNode.y) * edgeProgress;
+            }
+          }
+        } else if (activeTask.type === 'repair') {
+          isWorking = true;
+          const fault = faults.find(f => f.id === activeTask.taskId);
+          if (fault) nodeId = fault.substationId;
+        }
+      } else {
+        // Either hasn't started yet, or finished. 
+        // Find the last completed task.
+        const pastTasks = simResults.gantt.filter(
+          g => g.crewId === crew.id && g.end <= simTime
+        ).sort((a, b) => b.end - a.end);
+        
+        if (pastTasks.length > 0) {
+          const lastTask = pastTasks[0];
+          if (lastTask.type === 'travel' && lastTask.path) {
+             nodeId = lastTask.path[lastTask.path.length - 1];
+          } else {
+             const fault = faults.find(f => f.id === lastTask.taskId);
+             if (fault) nodeId = fault.substationId;
+          }
+        } else {
+          nodeId = crew.startNodeId || null;
+        }
       }
       
       return {
         id: crew.id,
         name: crew.name,
         nodeId,
-        isWorking: !!activeTask
+        x,
+        y,
+        isWorking
       };
     });
-  }, [simResults, simTime, faults]);
+  }, [simResults, simTime, faults, graph.nodes]);
 
   useEffect(() => {
     let interval: number;
@@ -231,17 +320,32 @@ export default function App() {
     }
 
     setMode('simulate');
-    const crews: Crew[] = [
-      { id: 'c1', name: 'Alpha-01 (Thread 0)', busy: false },
-      { id: 'c2', name: 'Beta-02 (Thread 1)', busy: false },
-      { id: 'c3', name: 'Gamma-03 (Thread 2)', busy: false },
-    ];
+    setSelectedNodeId(null);
+    
+    // Spawn crews at depots
+    const depots = graph.nodes.filter(n => n.type === 'depot');
+    const crews: Crew[] = depots.map((d, i) => ({
+      id: `c${i + 1}`,
+      name: `Crew ${d.name || d.id}`,
+      busy: false,
+      startNodeId: d.id
+    }));
+    
+    // Fallback if no depots
+    if (crews.length === 0) {
+      crews.push({
+        id: 'c1',
+        name: 'Emergency Crew',
+        busy: false,
+        startNodeId: graph.nodes[0].id
+      });
+    }
 
-    const results = simulateRoundRobin(faults, crews, 2);
-    setSimResults(results);
+    const results = simulateDispatch(graph, faults, crews);
+    setSimResults({ gantt: results.gantt, updatedFaults: results.updatedFaults, crews }); // Save crews into results if needed or just use results
     setSimTime(0);
     setIsPlaying(true);
-    addLog("OS Engine: Multithreading simulation complete (Round Robin).");
+    addLog(`OS Engine: Dispatching ${crews.length} crews to resolve ${faults.length} faults.`);
   };
 
   const resetAll = () => {
@@ -293,7 +397,10 @@ export default function App() {
         <div className="flex items-center gap-4">
           <div className="flex bg-slate-100 border border-slate-200 rounded-lg p-1 shadow-inner">
             <button 
-              onClick={() => setMode('build')}
+              onClick={() => {
+                setMode('build');
+                setSelectedNodeId(null);
+              }}
               className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-[10px] font-bold transition-all shadow-sm ${
                 mode === 'build' ? 'bg-blue-500 text-white' : 'text-slate-500 hover:text-blue-600 hover:bg-white'
               }`}
@@ -302,7 +409,10 @@ export default function App() {
               BUILD_MODE
             </button>
             <button 
-              onClick={() => setMode('simulate')}
+              onClick={() => {
+                setMode('simulate');
+                setSelectedNodeId(null);
+              }}
               className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-[10px] font-bold transition-all shadow-sm ${
                 mode === 'simulate' ? 'bg-fuchsia-500 text-white' : 'text-slate-500 hover:text-fuchsia-600 hover:bg-white'
               }`}
@@ -334,12 +444,21 @@ export default function App() {
               {[
                 { type: 'residential', icon: Building2, color: 'text-violet-500', bg: 'bg-violet-50 border-violet-200' },
                 { type: 'industrial', icon: Zap, color: 'text-amber-500', bg: 'bg-amber-50 border-amber-200' },
-                { type: 'hospital', icon: Hospital, color: 'text-rose-500', bg: 'bg-rose-50 border-rose-200' },
+                { type: 'hospital', label: 'critical', icon: Hospital, color: 'text-rose-500', bg: 'bg-rose-50 border-rose-200' },
                 { type: 'depot', icon: HardHat, color: 'text-blue-500', bg: 'bg-blue-50 border-blue-200' }
               ].map(b => (
                 <button
                   key={b.type}
-                  onClick={() => setSelectedBuildingType(b.type as Node['type'])}
+                  onClick={() => {
+                    setSelectedBuildingType(b.type as Node['type']);
+                    if (selectedNodeId) {
+                      setGraph(prev => ({
+                        ...prev,
+                        nodes: prev.nodes.map(n => n.id === selectedNodeId ? { ...n, type: b.type as Node['type'] } : n)
+                      }));
+                      addLog(`Reconfigured Node to ${b.label?.toUpperCase() || b.type.toUpperCase()}`);
+                    }
+                  }}
                   className={`flex flex-col items-center gap-2 p-3 rounded-lg border transition-all ${
                     selectedBuildingType === b.type 
                       ? `${b.bg} ring-2 ring-blue-500 ring-offset-1 scale-[0.98]` 
@@ -347,7 +466,7 @@ export default function App() {
                   }`}
                 >
                   <b.icon className={`w-5 h-5 ${b.color}`} />
-                  <span className="text-[9px] font-bold text-slate-700 uppercase">{b.type}</span>
+                  <span className="text-[9px] font-bold text-slate-700 uppercase">{b.label || b.type}</span>
                 </button>
               ))}
             </div>
@@ -512,9 +631,9 @@ export default function App() {
                   setGraph({ nodes: INITIAL_NODES, edges: INITIAL_EDGES });
                   // Inject 3 faults 
                   const demoFaults: FaultTask[] = [
-                    { id: 'f1', substationId: '3', severity: 20, arrivalTime: 0, burstTime: 6, remainingTime: 6 },
-                    { id: 'f2', substationId: '4', severity: 10, arrivalTime: 1, burstTime: 4, remainingTime: 4 },
-                    { id: 'f3', substationId: '5', severity: 10, arrivalTime: 2, burstTime: 8, remainingTime: 8 },
+                    { id: 'f1', substationId: 'h1', severity: 20, arrivalTime: 0, burstTime: 6, remainingTime: 6 },
+                    { id: 'f2', substationId: 'r4', severity: 10, arrivalTime: 1, burstTime: 4, remainingTime: 4 },
+                    { id: 'f3', substationId: 'i4', severity: 10, arrivalTime: 2, burstTime: 8, remainingTime: 8 },
                   ];
                   setFaults(demoFaults);
                   addLog("DEMO: 3 simultaneous faults injected across Grid.");
@@ -549,36 +668,30 @@ export default function App() {
 
         {/* Center/Right: Visual Canvas */}
         <div className="col-span-9 h-full flex flex-col gap-6">
-          <AnimatePresence mode="wait">
-            {mode === 'build' ? (
-              <motion.div 
-                key="canvas"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                className="flex-grow min-h-0"
-              >
-                <GridMap 
-                  graph={graph}
-                  onNodeClick={handleNodeClick}
-                  faultNodeIds={faults.map(f => f.substationId)}
-                  shortestPath={shortestPath}
-                  affectedZones={affectedZones}
-                  isBuilderMode={mode === 'build'}
-                  selectedBuilderSource={selectedNodeId}
-                  onBgClick={handleBgClick}
-                  onNodeRightClick={handleCycleNodeType}
-                  onNodePositionChange={handleNodePositionChange}
-                  activeCrews={activeCrews}
-                />
-              </motion.div>
-            ) : (
+          <div className={`${mode === 'simulate' ? 'h-1/2' : 'flex-grow'} transition-all duration-500 ease-in-out min-h-0 bg-white border border-slate-200 shadow-sm rounded-xl overflow-hidden relative flex flex-col`}>
+            <GridMap 
+              graph={graph}
+              onNodeClick={handleNodeClick}
+              faultNodeIds={faults.map(f => f.substationId)}
+              shortestPath={shortestPath}
+              affectedZones={affectedZones}
+              isBuilderMode={mode === 'build'}
+              selectedBuilderSource={selectedNodeId}
+              onBgClick={handleBgClick}
+              onNodeRightClick={handleCycleNodeType}
+              onNodePositionChange={handleNodePositionChange}
+              activeCrews={activeCrews}
+            />
+          </div>
+
+          <AnimatePresence>
+            {mode === 'simulate' && (
               <motion.div 
                 key="results"
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -20 }}
-                className="flex-grow overflow-y-auto custom-scrollbar"
+                initial={{ opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: '50%' }}
+                exit={{ opacity: 0, height: 0 }}
+                className="overflow-y-auto custom-scrollbar flex-shrink-0"
               >
                 {simResults ? (
                   <div className="space-y-6">

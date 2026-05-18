@@ -6,7 +6,9 @@ import { AlertCircle, Shield, Building2, Zap, HardHat, Hospital, Truck } from 'l
 export interface ActiveCrew {
   id: string;
   name: string;
-  nodeId: string | null;
+  nodeId?: string | null;
+  x?: number;
+  y?: number;
   isWorking: boolean;
 }
 
@@ -116,11 +118,6 @@ const GridMap: React.FC<GridMapProps> = ({ graph, faultNodeIds, shortestPath, af
     if (isPanning && e.target === svgRef.current && panTravel < 5 && onBgClick) {
       const rect = svgRef.current.getBoundingClientRect();
       onBgClick(e.clientX - rect.left - pan.x, e.clientY - rect.top - pan.y);
-    }
-    
-    if (draggedNode && nodeDragTravel < 5) {
-      // It was a click, not a real drag
-      onNodeClick(draggedNode);
     }
     
     setIsPanning(false);
@@ -240,6 +237,8 @@ const GridMap: React.FC<GridMapProps> = ({ graph, faultNodeIds, shortestPath, af
                 if (isBuilderMode && e.button === 0) {
                   e.stopPropagation();
                   setDraggedNode(node.id);
+                  setNodeDragTravel(0);
+                  setLastPointer({ x: e.clientX, y: e.clientY });
                   if (e.target instanceof Element && e.target.setPointerCapture) {
                     e.target.setPointerCapture(e.pointerId);
                   }
@@ -248,7 +247,11 @@ const GridMap: React.FC<GridMapProps> = ({ graph, faultNodeIds, shortestPath, af
               onPointerUp={(e) => {
                 if (draggedNode === node.id) {
                   e.stopPropagation();
+                  if (nodeDragTravel < 5) {
+                    onNodeClick(node.id);
+                  }
                   setDraggedNode(null);
+                  setNodeDragTravel(0);
                   if (e.target instanceof Element && e.target.releasePointerCapture) {
                     try {
                       e.target.releasePointerCapture(e.pointerId);
@@ -258,7 +261,7 @@ const GridMap: React.FC<GridMapProps> = ({ graph, faultNodeIds, shortestPath, af
               }}
               onClick={(e) => {
                 e.stopPropagation();
-                if (!draggedNode) {
+                if (!isBuilderMode) {
                   onNodeClick(node.id);
                 }
               }}
@@ -300,9 +303,16 @@ const GridMap: React.FC<GridMapProps> = ({ graph, faultNodeIds, shortestPath, af
 
         {/* Crews */}
         {activeCrews?.map((crew, idx) => {
-          if (!crew.nodeId) return null;
-          const targetNode = graph.nodes.find(n => n.id === crew.nodeId);
-          if (!targetNode) return null;
+          let cx = crew.x;
+          let cy = crew.y;
+          
+          if (cx === undefined || cy === undefined) {
+             if (!crew.nodeId) return null;
+             const targetNode = graph.nodes.find(n => n.id === crew.nodeId);
+             if (!targetNode) return null;
+             cx = targetNode.x || 0;
+             cy = targetNode.y || 0;
+          }
 
           const offsetX = (idx - 1) * 16;
           const offsetY = -28;
@@ -312,15 +322,15 @@ const GridMap: React.FC<GridMapProps> = ({ graph, faultNodeIds, shortestPath, af
               key={crew.id}
               initial={false}
               animate={{
-                x: targetNode.x + offsetX,
-                y: targetNode.y + offsetY
+                x: cx + offsetX,
+                y: cy + offsetY
               }}
               transition={{ type: "spring", stiffness: 60, damping: 15 }}
               className="pointer-events-none"
             >
               <rect x="-14" y="-12" width="28" height="24" rx="6" fill="#3b82f6" className="drop-shadow-md" />
-              <foreignObject x="-10" y="-10" width="20" height="20">
-                <Truck className={`w-5 h-5 text-white ${crew.isWorking ? 'animate-bounce' : 'opacity-70'}`} />
+              <foreignObject x="-10" y="-10" width="20" height="20" className="flex items-center justify-center">
+                <Truck className={`w-5 h-5 text-white ${crew.isWorking ? 'animate-bounce text-amber-300' : 'opacity-90'}`} />
               </foreignObject>
               <text y="-16" textAnchor="middle" className="text-[9px] font-bold fill-blue-700 drop-shadow-sm">
                 {crew.name}

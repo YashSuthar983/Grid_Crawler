@@ -19,7 +19,7 @@ const SchedulerUI: React.FC<SchedulerUIProps> = ({ gantt, faults, crews, current
       <div className="flex items-center justify-between border-b border-slate-200 pb-4">
         <h2 className="text-sm font-bold text-blue-600 uppercase tracking-widest flex items-center gap-2">
           <Clock className="w-4 h-4" />
-          Round Robin Engine: T-Slice(2s)
+          Dispatch Engine: Shortest Path + FIFO
         </h2>
         <div className="flex gap-4 text-[10px] text-slate-600">
           <div className="flex items-center gap-1">
@@ -54,21 +54,23 @@ const SchedulerUI: React.FC<SchedulerUIProps> = ({ gantt, faults, crews, current
                   <div className="relative h-10 border-l border-slate-300 flex-grow min-w-[600px] bg-slate-50 rounded shadow-inner">
                     {crewEntries.map((entry, i) => {
                       const fault = faults.find(f => f.id === entry.taskId);
+                      const isTravel = entry.type === 'travel';
+                      
                       return (
                         <motion.div
-                          key={`${crew.id}-${entry.taskId}-${i}`}
+                          key={`${crew.id}-${entry.taskId}-${i}-${entry.type}`}
                           initial={{ opacity: 0, scaleX: 0 }}
                           animate={{ opacity: 1, scaleX: 1 }}
-                          className="absolute h-8 top-1 border border-blue-400/50 flex items-center justify-center rounded shadow-sm"
+                          className={`absolute h-8 top-1 flex items-center justify-center rounded shadow-sm overflow-hidden ${isTravel ? 'border border-amber-300 border-dashed bg-slate-200' : 'border border-blue-400/50'}`}
                           style={{
                             left: entry.start * scale,
                             width: (entry.end - entry.start) * scale,
-                            backgroundColor: `hsla(${parseInt(entry.taskId) * 137.5 % 360}, 80%, 80%, 0.5)`,
-                            borderLeft: '4px solid #3b82f6'
+                            backgroundColor: isTravel ? '#f1f5f9' : `hsla(${parseInt(entry.taskId) * 137.5 % 360}, 80%, 80%, 0.5)`,
+                            borderLeft: isTravel ? '4px solid #f59e0b' : '4px solid #3b82f6'
                           }}
                         >
-                          <span className="text-[9px] text-slate-800 font-bold truncate px-1">
-                            {fault?.substationId}
+                          <span className={`text-[9px] font-bold truncate px-1 ${isTravel ? 'text-slate-500' : 'text-slate-800'}`}>
+                            {isTravel ? '->' : fault?.substationId}
                           </span>
                         </motion.div>
                       );
