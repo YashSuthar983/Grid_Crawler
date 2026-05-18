@@ -17,8 +17,10 @@ const state = {
 // ── Node screen positions ─────────────────────────
 let nodePos = {};
 function calcPositions() {
-  const W = canvas.width, H = canvas.height;
-  const padX = 80, padY = 60;
+  const ratio = window.devicePixelRatio || 1;
+  const W = canvas.width / ratio, H = canvas.height / ratio;
+  const padX = Math.max(42, Math.min(86, W * 0.08));
+  const padY = Math.max(46, Math.min(76, H * 0.12));
   const gapX = (W - padX*2) / 9, gapY = (H - padY*2) / 5;
   graph.nodes.forEach(id => {
     const p = graph.positions[id];
@@ -28,12 +30,15 @@ function calcPositions() {
 
 // ── Resize ────────────────────────────────────────
 function resize() {
-  const wrap = document.getElementById('canvas-wrap');
-  canvas.width = wrap.clientWidth * devicePixelRatio;
-  canvas.height = wrap.clientHeight * devicePixelRatio;
-  canvas.style.width = wrap.clientWidth + 'px';
-  canvas.style.height = wrap.clientHeight + 'px';
-  ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+  const wrap = document.getElementById('canvas-wrap') || document.body;
+  const ratio = window.devicePixelRatio || 1;
+  const width = Math.max(1, wrap.clientWidth);
+  const height = Math.max(1, wrap.clientHeight);
+  canvas.width = width * ratio;
+  canvas.height = height * ratio;
+  canvas.style.width = width + 'px';
+  canvas.style.height = height + 'px';
+  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
   calcPositions();
 }
 window.addEventListener('resize', resize);
@@ -89,19 +94,19 @@ function drawNode(id) {
   } else {
     ctx.fillStyle = '#f8fafc';
   }
-  ctx.font = '600 9px Inter';
+  ctx.font = '700 9px JetBrains Mono, monospace';
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   ctx.fillText(id.replace('S0','S').replace('S',''), p.x, p.y);
   
   // Type icon
   if (t && t !== 'normal') {
-    const icons = {depot:'⚡',hospital:'🏥',water:'💧',emergency:'🚨'};
-    ctx.font = '12px sans-serif';
+    const icons = {depot:'P',hospital:'H',water:'W',emergency:'E'};
+    ctx.font = '700 10px JetBrains Mono, monospace';
     ctx.fillText(icons[t]||'', p.x, p.y - r - 10);
   }
   if (state.faults.has(id)) {
-    ctx.font = '14px sans-serif';
-    ctx.fillText('💥', p.x + r + 4, p.y - r);
+    ctx.font = '700 14px JetBrains Mono, monospace';
+    ctx.fillText('!', p.x + r + 6, p.y - r);
   }
 }
 
@@ -130,7 +135,7 @@ function drawParticles() {
     const x = p1.x + (p2.x - p1.x) * p.t;
     const y = p1.y + (p2.y - p1.y) * p.t;
     ctx.beginPath(); ctx.arc(x, y, 2, 0, Math.PI*2);
-    ctx.fillStyle = `rgba(0,229,160,${0.6 - p.t*0.4})`;
+    ctx.fillStyle = `rgba(32,199,164,${0.62 - p.t*0.42})`;
     ctx.fill();
     p.t += p.speed;
   });
@@ -207,7 +212,7 @@ function render() {
         const pi = state.bfsAnim.path.indexOf(n), pj = state.bfsAnim.path.indexOf(nb);
         if (Math.abs(pi-pj) === 1) { col = '#a78bfa88'; w = 3; }
       }
-      if (state.faults.has(n) || state.faults.has(nb)) { col = 'rgba(255,77,106,0.15)'; }
+      if (state.faults.has(n) || state.faults.has(nb)) { col = 'rgba(232,93,117,0.18)'; }
       drawEdge(n, nb, col, w);
     });
   });
@@ -221,7 +226,7 @@ function render() {
     state.bfsAnim.visited.forEach(n => {
       const p = nodePos[n]; if (!p) return;
       ctx.beginPath(); ctx.arc(p.x, p.y, 18, 0, Math.PI*2);
-      ctx.fillStyle = 'rgba(37,99,235,0.12)'; ctx.fill();
+      ctx.fillStyle = 'rgba(90,169,230,0.13)'; ctx.fill();
     });
   }
 
@@ -242,7 +247,7 @@ function showHUD(show, icon, text) {
   const hud = $('algo-hud');
   if (!show) { hud.classList.add('hidden'); return; }
   hud.classList.remove('hidden');
-  $('algo-hud-icon').textContent = icon || '🔍';
+  $('algo-hud-icon').textContent = icon || 'B';
   $('algo-hud-text').textContent = text || '';
 }
 
@@ -251,7 +256,7 @@ function toast(msg, type='score') {
   el.className = `toast toast-${type}`;
   el.textContent = msg;
   $('toast-container').appendChild(el);
-  setTimeout(() => el.remove(), 1600);
+  setTimeout(() => el.remove(), 1800);
 }
 
 function addScore(pts, reason) {
@@ -272,8 +277,16 @@ function updateHealth() {
   const total = graph.nodes.length;
   const healthy = total - state.faults.size;
   state.health = Math.round((healthy / total) * 100);
+  $('health-val').textContent = state.health + '%';
   $('health-fill').style.width = state.health + '%';
+  $('health-fill').style.background = state.health < 85
+    ? 'linear-gradient(90deg, #e85d75, #f0a541)'
+    : 'linear-gradient(90deg, #34c779, #20c7a4)';
   $('fault-count').textContent = state.faults.size;
+  $('open-faults-val').textContent = state.faults.size;
+  $('system-status').textContent = state.faults.size
+    ? (state.dispatched.size ? 'Dispatching' : 'Fault Active')
+    : 'Stable';
 }
 
 function addLog(type, msg) {
@@ -288,11 +301,38 @@ function updateButtons() {
   $('btn-bfs').disabled = !hasSel || state.animating;
   $('btn-dfs').disabled = !hasSel || state.animating;
   $('btn-dispatch').disabled = !hasFault || state.animating;
+  updateSelectionChip();
+}
+
+function resetAlgorithmVisuals() {
+  state.bfsAnim = { active:false, step:0, levels:[], path:[], visited: new Set() };
+  state.dfsAnim = { active:false, step:0, steps:[], visited: new Set() };
+  state.bfsResult = null;
+  state.dfsResult = null;
+}
+
+function selectNode(id) {
+  state.selected = id;
+  resetAlgorithmVisuals();
+  updateNodeInfo(id);
+  updateButtons();
+}
+
+function updateSelectionChip() {
+  const chip = $('selection-chip');
+  if (!chip) return;
+  if (!state.selected) {
+    chip.innerHTML = '<span class="status-dot muted" aria-hidden="true"></span>No node selected';
+    return;
+  }
+  const type = NODE_CONFIG[state.selected] || 'normal';
+  const isFault = state.faults.has(state.selected);
+  chip.innerHTML = `<span class="status-dot ${isFault ? 'danger' : 'ok'}" aria-hidden="true"></span>${state.selected} · ${type} · ${isFault ? 'Fault' : 'Healthy'}`;
 }
 
 function updateNodeInfo(id) {
   if (!id) {
-    $('node-info-content').innerHTML = '<p class="placeholder-text">Click a node on the grid</p>';
+    $('node-info-content').innerHTML = '<p class="placeholder-text">Select a node on the grid.</p>';
     return;
   }
   const t = NODE_CONFIG[id] || 'normal';
@@ -303,7 +343,7 @@ function updateNodeInfo(id) {
     <div class="info-row"><span class="info-label">Node</span><span class="info-value" style="color:${col}">${id}</span></div>
     <div class="info-row"><span class="info-label">Type</span><span class="info-value">${t}</span></div>
     <div class="info-row"><span class="info-label">Priority</span><span class="info-value">P${pri}</span></div>
-    <div class="info-row"><span class="info-label">Status</span><span class="info-value" style="color:${isFault?'#ff4d6a':'#00e5a0'}">${isFault?'⚠ FAULT':'✓ Healthy'}</span></div>
+    <div class="info-row"><span class="info-label">Status</span><span class="info-value" style="color:${isFault?'#e85d75':'#20c7a4'}">${isFault?'Fault':'Healthy'}</span></div>
     <div class="info-row"><span class="info-label">Neighbors</span><span class="info-value">${graph.neighbors(id).length}</span></div>`;
 }
 
@@ -329,13 +369,7 @@ canvas.addEventListener('click', e => {
     const d = Math.hypot(p.x - mx, p.y - my);
     if (d < minD) { minD = d; closest = id; }
   });
-  state.selected = closest;
-  // Clear previous algo visuals
-  state.bfsAnim = { active:false, step:0, levels:[], path:[], visited: new Set() };
-  state.dfsAnim = { active:false, step:0, steps:[], visited: new Set() };
-  state.bfsResult = null; state.dfsResult = null;
-  updateNodeInfo(closest);
-  updateButtons();
+  selectNode(closest);
 });
 
 // ── Button handlers ───────────────────────────────
@@ -344,9 +378,10 @@ $('btn-fault').addEventListener('click', () => {
   if (!healthy.length) return;
   const node = healthy[Math.floor(Math.random() * healthy.length)];
   state.faults.add(node);
+  selectNode(node);
   updateHealth(); updatePQ(); updateButtons();
-  addLog('fault', `⚠ Fault at ${node} (${NODE_CONFIG[node]||'normal'})`);
-  toast(`💥 Fault: ${node}`, 'danger');
+  addLog('fault', `Fault at ${node} (${NODE_CONFIG[node]||'normal'})`);
+  toast(`Fault opened: ${node}`, 'danger');
 });
 
 $('btn-bfs').addEventListener('click', () => {
@@ -356,7 +391,7 @@ $('btn-bfs').addEventListener('click', () => {
   if (!state.bfsResult.path) { toast('No path found!', 'danger'); return; }
   state.bfsAnim = { active:true, step:0, levels: state.bfsResult.levels, path:[], visited: new Set(), _timer:0 };
   state.animating = true;
-  showHUD(true, '🔵', `Running BFS: ${depot} → ${state.selected}`);
+  showHUD(true, 'B', `Running BFS: ${depot} → ${state.selected}`);
   updateButtons();
   // Wait for anim to finish
   const check = setInterval(() => {
@@ -369,7 +404,7 @@ $('btn-dfs').addEventListener('click', () => {
   state.dfsResult = dfs(graph, state.selected);
   state.dfsAnim = { active:true, step:0, steps: state.dfsResult.steps, visited: new Set(), _timer:0 };
   state.animating = true;
-  showHUD(true, '🟢', `Running DFS from ${state.selected}`);
+  showHUD(true, 'D', `Running DFS from ${state.selected}`);
   updateButtons();
   const check = setInterval(() => {
     if (!state.dfsAnim.active) { state.animating = false; updateButtons(); clearInterval(check); }
@@ -387,6 +422,7 @@ $('btn-dispatch').addEventListener('click', () => {
   const result = roundRobin(jobs, quantum, crews);
   state.ganttData = result;
   faultList.forEach(f => state.dispatched.add(f));
+  updateHealth(); updatePQ(); updateButtons();
 
   // Render Gantt
   renderGantt(result, crews);
@@ -397,8 +433,8 @@ $('btn-dispatch').addEventListener('click', () => {
   setTimeout(() => {
     faultList.forEach(f => state.faults.delete(f));
     state.dispatched.clear();
-    updateHealth(); updatePQ(); updateButtons();
-    toast('✓ All faults repaired!', 'info');
+    updateHealth(); updatePQ(); updateNodeInfo(state.selected); updateButtons();
+    toast('All faults repaired', 'info');
   }, 1500);
 
   // Switch to Gantt tab
@@ -406,7 +442,7 @@ $('btn-dispatch').addEventListener('click', () => {
 });
 
 $('btn-compare').addEventListener('click', () => {
-  const depot = 'S01', target = state.selected || 'S07';
+  const depot = 'S01', target = state.selected || [...state.faults][0] || 'S07';
   addLog('bfs', `Running BFS vs Brute Force: ${depot} → ${target}`);
 
   const t0b = performance.now();
@@ -437,9 +473,7 @@ $('btn-compare').addEventListener('click', () => {
 $('btn-reset').addEventListener('click', () => {
   state.faults.clear(); state.dispatched.clear();
   state.selected = null; state.score = 0; state.level = 1;
-  state.bfsAnim = { active:false, step:0, levels:[], path:[], visited: new Set() };
-  state.dfsAnim = { active:false, step:0, steps:[], visited: new Set() };
-  state.bfsResult = null; state.dfsResult = null;
+  resetAlgorithmVisuals();
   state.ganttData = null; state.animating = false;
   $('score-val').textContent = '0'; $('level-val').textContent = '1';
   updateHealth(); updatePQ(); updateButtons(); updateNodeInfo(null);
@@ -487,11 +521,21 @@ function renderGantt(result, numCrews) {
 
 // ── Bottom tabs ───────────────────────────────────
 function switchTab(name) {
-  document.querySelectorAll('.bottom-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
-  document.querySelectorAll('.bottom-pane').forEach(p => p.classList.toggle('active', p.id === 'pane-'+name));
+  document.querySelectorAll('.dock-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
+  document.querySelectorAll('.pane').forEach(p => p.classList.toggle('active', p.id === 'pane-'+name));
 }
-document.querySelectorAll('.bottom-tab').forEach(t => t.addEventListener('click', () => switchTab(t.dataset.tab)));
+document.querySelectorAll('.dock-tab').forEach(t => t.addEventListener('click', () => switchTab(t.dataset.tab)));
+
+$('dock-toggle').addEventListener('click', () => {
+  const dock = $('dock');
+  const collapsed = dock.classList.toggle('collapsed');
+  $('dock-toggle').textContent = collapsed ? '⌃' : '⌄';
+  $('dock-toggle').setAttribute('aria-expanded', String(!collapsed));
+});
 
 // ── Start ─────────────────────────────────────────
+updateHealth();
+updatePQ();
+updateButtons();
 render();
 addLog('score', '⚡ Grid Fault Manager initialized — 60 nodes, 124 edges');

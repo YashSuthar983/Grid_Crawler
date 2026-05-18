@@ -8,8 +8,8 @@ const NODE_CONFIG = {
 };
 const PRIORITY_MAP = {hospital:1,water:2,emergency:2,depot:3,hub:3,normal:4};
 const TYPE_COLORS = {
-  depot:'#00d4ff',hospital:'#ff6b9d',water:'#4ea8ff',
-  emergency:'#ffb84d',normal:'#00e5a0'
+  depot:'#20d5ea',hospital:'#ff6b9d',water:'#5aa9e6',
+  emergency:'#f0a541',normal:'#20c7a4'
 };
 const EDGES_RAW = `S01-S02,S01-S11,S02-S03,S02-S12,S03-S04,S03-S13,S04-S05,S04-S14,S05-S06,S05-S15,
 S06-S07,S06-S16,S07-S08,S07-S17,S08-S09,S08-S18,S09-S10,S09-S19,S10-S20,S11-S12,

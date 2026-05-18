@@ -3,135 +3,181 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Grid Fault Manager — Command Center</title>
+  <title>Grid Fault Manager</title>
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
+  <div class="app-shell">
+    <header class="command-bar">
+      <div class="brand-lockup">
+        <div class="brand-mark" aria-hidden="true">⚡</div>
+        <div>
+          <h1>Grid Fault Manager</h1>
+          <span>Algorithmic dispatch console</span>
+        </div>
+      </div>
 
-  <!-- Fullscreen Canvas -->
-  <canvas id="grid-canvas"></canvas>
-  
-  <div id="canvas-overlay">
-    <div id="toast-container"></div>
-    <div id="algo-hud" class="hidden">
-      <span id="algo-hud-icon">🔍</span>
-      <span id="algo-hud-text">Running Algorithm...</span>
-    </div>
+      <div class="health-module" aria-label="Grid health">
+        <div class="health-copy">
+          <span>Grid Health</span>
+          <strong id="health-val">100%</strong>
+        </div>
+        <div class="health-bar" aria-hidden="true">
+          <span id="health-fill"></span>
+        </div>
+      </div>
+
+      <div class="kpi-strip" aria-label="Session metrics">
+        <div class="kpi">
+          <span>Score</span>
+          <strong id="score-val">0</strong>
+        </div>
+        <div class="kpi">
+          <span>Level</span>
+          <strong id="level-val">1</strong>
+        </div>
+        <div class="kpi">
+          <span>Open Faults</span>
+          <strong id="open-faults-val">0</strong>
+        </div>
+        <div class="kpi system-kpi">
+          <span>Status</span>
+          <strong id="system-status">Stable</strong>
+        </div>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <aside class="panel operations-panel">
+        <div class="panel-header">
+          <div>
+            <h2 class="panel-title">Operations</h2>
+            <p class="panel-subtitle">Fault response controls</p>
+          </div>
+          <span class="live-dot" aria-hidden="true"></span>
+        </div>
+
+        <div class="button-stack">
+          <button class="btn btn-danger" id="btn-fault" type="button">
+            <span class="btn-icon" aria-hidden="true">!</span>
+            <span>Trigger Fault</span>
+          </button>
+          <div class="action-group">
+            <button class="btn btn-primary" id="btn-bfs" type="button" disabled>
+              <span class="btn-icon" aria-hidden="true">B</span>
+              <span>BFS Path</span>
+            </button>
+            <button class="btn btn-success" id="btn-dfs" type="button" disabled>
+              <span class="btn-icon" aria-hidden="true">D</span>
+              <span>DFS Zone</span>
+            </button>
+          </div>
+          <button class="btn btn-warning" id="btn-dispatch" type="button" disabled>
+            <span class="btn-icon" aria-hidden="true">RR</span>
+            <span>Dispatch Crews</span>
+          </button>
+          <button class="btn btn-secondary" id="btn-compare" type="button">
+            <span class="btn-icon" aria-hidden="true">Σ</span>
+            <span>BFS vs Brute Force</span>
+          </button>
+          <button class="btn btn-outline" id="btn-reset" type="button">
+            <span class="btn-icon" aria-hidden="true">↺</span>
+            <span>System Reset</span>
+          </button>
+        </div>
+
+        <div class="section-rule"></div>
+
+        <div class="settings-grid">
+          <div class="setting-item">
+            <label for="input-quantum">Quantum</label>
+            <input type="number" id="input-quantum" value="2" min="1" max="10">
+          </div>
+          <div class="setting-item">
+            <label for="input-crews">Crews</label>
+            <input type="number" id="input-crews" value="3" min="1" max="6">
+          </div>
+          <div class="setting-item full-width">
+            <label for="input-speed">Animation Speed</label>
+            <input type="range" id="input-speed" min="1" max="10" value="5">
+          </div>
+        </div>
+      </aside>
+
+      <section class="map-shell" id="canvas-wrap" aria-label="Grid topology map">
+        <canvas id="grid-canvas"></canvas>
+        <div id="canvas-overlay">
+          <div id="toast-container"></div>
+          <div id="algo-hud" class="hidden">
+            <span id="algo-hud-icon">B</span>
+            <span id="algo-hud-text">Running algorithm</span>
+          </div>
+        </div>
+        <div class="map-topbar">
+          <div class="status-pill" id="selection-chip">
+            <span class="status-dot muted" aria-hidden="true"></span>
+            No node selected
+          </div>
+          <div class="map-legend" aria-label="Node legend">
+            <span><i class="legend-dot depot"></i>Depot</span>
+            <span><i class="legend-dot hospital"></i>Hospital</span>
+            <span><i class="legend-dot water"></i>Water</span>
+            <span><i class="legend-dot emergency"></i>Emergency</span>
+          </div>
+        </div>
+      </section>
+
+      <aside class="panel insight-panel">
+        <div class="panel-section">
+          <div class="panel-header compact">
+            <h2 class="panel-title">Node Inspector</h2>
+          </div>
+          <div id="node-info-content" class="info-surface">
+            <p class="placeholder-text">Select a node on the grid.</p>
+          </div>
+        </div>
+
+        <div class="section-rule"></div>
+
+        <div class="panel-section queue-panel">
+          <div class="panel-header compact">
+            <h2 class="panel-title">Priority Queue</h2>
+            <span class="fault-badge" id="fault-count">0</span>
+          </div>
+          <div id="pq-list" class="queue-list custom-scroll">
+            <p class="placeholder-text">Grid is stable. No faults.</p>
+          </div>
+        </div>
+      </aside>
+    </main>
+
+    <footer class="panel analytics-dock" id="dock">
+      <div class="dock-header">
+        <div class="dock-tabs" role="tablist" aria-label="Analytics views">
+          <button class="dock-tab active" data-tab="gantt" type="button">Gantt Chart</button>
+          <button class="dock-tab" data-tab="perf" type="button">Performance</button>
+          <button class="dock-tab" data-tab="log" type="button">System Log</button>
+        </div>
+        <button class="icon-btn" id="dock-toggle" type="button" title="Toggle dock" aria-expanded="true">⌄</button>
+      </div>
+      <div class="dock-content custom-scroll" id="dock-content">
+        <div class="pane active" id="pane-gantt">
+          <div id="gantt-chart">
+            <p class="placeholder-text">Awaiting dispatch orders to generate timeline.</p>
+          </div>
+        </div>
+        <div class="pane" id="pane-perf">
+          <div id="perf-content">
+            <p class="placeholder-text">Run comparison to view metrics.</p>
+          </div>
+        </div>
+        <div class="pane" id="pane-log">
+          <div id="log-content"></div>
+        </div>
+      </div>
+    </footer>
   </div>
-
-  <!-- Top Left: Branding & Overview -->
-  <header class="floating-panel top-left branding">
-    <div class="logo-area">
-      <div class="logo-icon">⚡</div>
-      <div class="logo-text">
-        <h1>Grid Command</h1>
-        <span class="badge">DAA + OS</span>
-      </div>
-    </div>
-    <div class="stats-row">
-      <div class="stat">
-        <span class="stat-lbl">Score</span>
-        <span class="stat-val text-accent" id="score-val">0</span>
-      </div>
-      <div class="stat">
-        <span class="stat-lbl">Level</span>
-        <span class="stat-val" id="level-val">1</span>
-      </div>
-      <div class="stat">
-        <span class="stat-lbl">Grid Health</span>
-        <span class="stat-val" id="health-val">100%</span>
-      </div>
-    </div>
-  </header>
-
-  <!-- Top Right: Operations & Inspector -->
-  <aside class="floating-panel top-right controls">
-    <h3 class="panel-title">Operations</h3>
-    <button class="btn btn-danger" id="btn-fault">
-      <span class="icon">💥</span> Trigger Fault
-    </button>
-    <div class="action-group">
-      <button class="btn btn-primary" id="btn-bfs" disabled>
-        <span class="icon">🔵</span> BFS Path
-      </button>
-      <button class="btn btn-success" id="btn-dfs" disabled>
-        <span class="icon">🟢</span> DFS Zone
-      </button>
-    </div>
-    <button class="btn btn-warning" id="btn-dispatch" disabled>
-      <span class="icon">🚀</span> Dispatch Crews
-    </button>
-    <button class="btn btn-secondary" id="btn-compare">
-      <span class="icon">📊</span> BFS vs Brute Force
-    </button>
-    <button class="btn btn-outline" id="btn-reset">
-      <span class="icon">🔄</span> System Reset
-    </button>
-    
-    <div class="divider"></div>
-    
-    <h3 class="panel-title">Node Inspector</h3>
-    <div id="node-info-content" class="glass-box">
-      <p class="placeholder-text">Select a node on the grid.</p>
-    </div>
-
-    <div class="divider"></div>
-    
-    <h3 class="panel-title">Settings</h3>
-    <div class="settings-grid">
-      <div class="setting-item">
-        <label>Quantum</label>
-        <input type="number" id="input-quantum" value="2" min="1" max="10">
-      </div>
-      <div class="setting-item">
-        <label>Crews</label>
-        <input type="number" id="input-crews" value="3" min="1" max="6">
-      </div>
-      <div class="setting-item full-width">
-        <label>Animation Speed</label>
-        <input type="range" id="input-speed" min="1" max="10" value="5">
-      </div>
-    </div>
-  </aside>
-
-  <!-- Bottom Left: Priority Queue -->
-  <aside class="floating-panel bottom-left queue-panel">
-    <div class="panel-header">
-      <h3 class="panel-title">Priority Queue</h3>
-      <span class="fault-badge" id="fault-count">0</span>
-    </div>
-    <div id="pq-list" class="glass-box custom-scroll">
-      <p class="placeholder-text">Grid is stable. No faults.</p>
-    </div>
-  </aside>
-
-  <!-- Bottom Right: Expandable Analytics Dock -->
-  <footer class="floating-panel bottom-right analytics-dock" id="dock">
-    <div class="dock-header">
-      <div class="dock-tabs">
-        <button class="dock-tab active" data-tab="gantt">Gantt Chart</button>
-        <button class="dock-tab" data-tab="perf">Performance</button>
-        <button class="dock-tab" data-tab="log">System Log</button>
-      </div>
-      <button class="icon-btn" id="dock-toggle" title="Toggle Dock">▼</button>
-    </div>
-    <div class="dock-content custom-scroll" id="dock-content">
-      <div class="pane active" id="pane-gantt">
-        <div id="gantt-chart">
-          <p class="placeholder-text">Awaiting dispatch orders to generate timeline.</p>
-        </div>
-      </div>
-      <div class="pane" id="pane-perf">
-        <div id="perf-content">
-          <p class="placeholder-text">Run comparison to view metrics.</p>
-        </div>
-      </div>
-      <div class="pane" id="pane-log">
-        <div id="log-content"></div>
-      </div>
-    </div>
-  </footer>
 
   <script src="engine.js"></script>
   <script src="game.js"></script>
