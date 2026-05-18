@@ -78,6 +78,53 @@ function bfs(graph, start, target) {
   return { path: null, hops: -1, levels };
 }
 
+// ── Multi-source BFS: nearest depot ───────────────
+// Seeds every depot at level 0 so the first wavefront to reach the
+// target identifies the genuinely closest depot. Still O(V+E).
+function nearestDepot(graph, depots, target) {
+  depots = depots.filter(d => graph.adj[d]);
+  if (!depots.length) return { depot:null, path:null, hops:-1, levels:[] };
+  if (depots.includes(target))
+    return { depot:target, path:[target], hops:0, levels:[[target]] };
+
+  const visited = new Set(depots);
+  const parent = {}, origin = {};
+  depots.forEach(d => { parent[d] = null; origin[d] = d; });
+  let queue = [...depots];
+  const levels = [[...depots]];
+
+  while (queue.length) {
+    const next = [];
+    for (const node of queue) {
+      for (const nb of graph.neighbors(node)) {
+        if (visited.has(nb)) continue;
+        visited.add(nb);
+        parent[nb] = node;
+        origin[nb] = origin[node];
+        next.push(nb);
+        if (nb === target) {
+          levels.push(next);
+          const path = [];
+          let c = target;
+          while (c !== null) { path.unshift(c); c = parent[c]; }
+          return { depot: origin[target], path,
+                   hops: path.length - 1, levels };
+        }
+      }
+    }
+    if (next.length) levels.push(next);
+    queue = next;
+  }
+  return { depot:null, path:null, hops:-1, levels };
+}
+
+// All depot node IDs from the config (falls back to S01).
+function depotList() {
+  const ds = Object.keys(NODE_CONFIG)
+    .filter(n => NODE_CONFIG[n] === 'depot').sort();
+  return ds.length ? ds : ['S01'];
+}
+
 // ── DFS ───────────────────────────────────────────
 function dfs(graph, start) {
   const visited = new Set(), order = [], critical = [];
@@ -97,51 +144,101 @@ function dfs(graph, start) {
 }
 
 // ── Brute Force ───────────────────────────────────
-function bruteForce(graph, start, target, timeLimitMs = 2000) {
+// Depth-bounded exhaustive search: enumerate every simple path up to
+// maxDepth hops, then pick the shortest. The bound guarantees it
+// terminates while still exploring exponentially many paths, so the
+// cost gap vs BFS is real (O(b^d) vs O(V+E)).
+function bruteForce(graph, start, target, maxDepth = 8, timeLimitMs = 4000) {
   const allPaths = [];
-  let truncated = false;
+  let truncated = false, expanded = 0;
   const deadline = performance.now() + timeLimitMs;
   function explore(node, path, visited) {
+    if (truncated) return;
     if (performance.now() >= deadline) { truncated = true; return; }
     if (node === target) { allPaths.push([...path]); return; }
+    if (path.length - 1 >= maxDepth) return;        // depth bound (hops)
     for (const nb of graph.neighbors(node)) {
-      if (!visited.has(nb) && !truncated) {
-        visited.add(nb); path.push(nb);
-        explore(nb, path, visited);
-        path.pop(); visited.delete(nb);
-      }
+      if (visited.has(nb)) continue;
+      expanded++;
+      visited.add(nb); path.push(nb);
+      explore(nb, path, visited);
+      path.pop(); visited.delete(nb);
     }
   }
   explore(start, [start], new Set([start]));
-  if (!allPaths.length) return { path:null, hops:-1, count:0, truncated };
+  if (!allPaths.length)
+    return { path:null, hops:-1, count:0, expanded, maxDepth, truncated };
   const shortest = allPaths.reduce((a,b) => a.length<=b.length?a:b);
-  return { path:shortest, hops:shortest.length-1, count:allPaths.length, truncated };
+  return { path:shortest, hops:shortest.length-1,
+           count:allPaths.length, expanded, maxDepth, truncated };
 }
 
-// ── Round Robin Scheduler ─────────────────────────
+// ── Round Robin Scheduler (parallel multi-crew) ───
+// C crews are C parallel servers: up to C faults are repaired
+// simultaneously each quantum, none blocking another. Waiting time
+// uses the standard RR formula: wait = turnaround − burst.
 function roundRobin(jobs, quantum, numCrews) {
-  const queue = jobs.map(j => ({...j, remaining: j.repairTime, startTime:null, completionTime:null}));
-  const log = [], metrics = [];
-  let t = 0, idx = 0;
-  const q = [...queue];
-  while (q.length) {
-    const job = q.shift();
-    const crew = (idx % numCrews) + 1;
-    if (job.startTime === null) job.startTime = t;
-    const slice = Math.min(quantum, job.remaining);
-    log.push({ crew, job: job.id, node: job.node, tStart: t, tEnd: t+slice, priority: job.priority });
-    job.remaining -= slice;
-    t += slice;
-    if (job.remaining > 0) q.push(job);
-    else {
-      job.completionTime = t;
-      metrics.push({
-        id: job.id, node: job.node, priority: job.priority,
-        arrival: 0, start: job.startTime, completion: t,
-        waiting: job.startTime, turnaround: t
-      });
+  const work = jobs.map(j => ({
+    ...j, total: j.repairTime, remaining: j.repairTime,
+    startTime: null, completionTime: null,
+  }));
+  const ready = [...work];                       // priority-ordered queue
+  const crews = {};
+  for (let c = 1; c <= numCrews; c++)
+    crews[c] = { freeAt: 0, job: null };
+  const crewBusy = {};
+  for (let c = 1; c <= numCrews; c++) crewBusy[c] = 0;
+
+  const log = [];
+  let t = 0, completed = 0;
+  const total = work.length;
+
+  while (completed < total) {
+    // 1. Release crews whose slice finished at t.
+    for (let c = 1; c <= numCrews; c++) {
+      const cr = crews[c];
+      if (cr.job && cr.freeAt <= t) {
+        if (cr.job.remaining > 0) ready.push(cr.job);   // preempted
+        else { cr.job.completionTime = t; completed++; }
+        cr.job = null;
+      }
     }
-    idx++;
+    // 2. Assign idle crews to waiting jobs (RR order).
+    for (let c = 1; c <= numCrews; c++) {
+      const cr = crews[c];
+      if (!cr.job && ready.length) {
+        const job = ready.shift();
+        if (job.startTime === null) job.startTime = t;
+        const slice = Math.min(quantum, job.remaining);
+        job.remaining -= slice;
+        cr.job = job;
+        cr.freeAt = t + slice;
+        crewBusy[c] += slice;
+        log.push({ crew:c, job:job.id, node:job.node,
+                   tStart:t, tEnd:t+slice, priority:job.priority });
+      }
+    }
+    // 3. Advance to the next crew release.
+    const busy = Object.values(crews)
+      .filter(cr => cr.job).map(cr => cr.freeAt);
+    if (busy.length) t = Math.min(...busy);
+    else if (ready.length) continue;
+    else break;
   }
-  return { log, metrics, totalTime: t };
+
+  const metrics = work
+    .sort((a,b) => a.id - b.id)
+    .map(j => {
+      const turnaround = j.completionTime - 0;
+      return {
+        id:j.id, node:j.node, priority:j.priority,
+        arrival:0, start:j.startTime, completion:j.completionTime,
+        turnaround, waiting: turnaround - j.total,
+      };
+    });
+  const crewUtil = {};
+  for (let c = 1; c <= numCrews; c++)
+    crewUtil[c] = { busy: crewBusy[c], idle: t - crewBusy[c] };
+
+  return { log, metrics, crewUtil, totalTime: t };
 }

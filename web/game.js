@@ -386,12 +386,13 @@ $('btn-fault').addEventListener('click', () => {
 
 $('btn-bfs').addEventListener('click', () => {
   if (!state.selected || state.animating) return;
-  const depot = 'S01';
-  state.bfsResult = bfs(graph, depot, state.selected);
+  const depots = depotList();
+  state.bfsResult = nearestDepot(graph, depots, state.selected);
   if (!state.bfsResult.path) { toast('No path found!', 'danger'); return; }
+  const depot = state.bfsResult.depot;
   state.bfsAnim = { active:true, step:0, levels: state.bfsResult.levels, path:[], visited: new Set(), _timer:0 };
   state.animating = true;
-  showHUD(true, 'B', `Running BFS: ${depot} → ${state.selected}`);
+  showHUD(true, 'B', `Running BFS: nearest depot ${depot} → ${state.selected}`);
   updateButtons();
   // Wait for anim to finish
   const check = setInterval(() => {
@@ -442,29 +443,40 @@ $('btn-dispatch').addEventListener('click', () => {
 });
 
 $('btn-compare').addEventListener('click', () => {
-  const depot = 'S01', target = state.selected || [...state.faults][0] || 'S07';
-  addLog('bfs', `Running BFS vs Brute Force: ${depot} → ${target}`);
+  const target = state.selected || [...state.faults][0] || 'S07';
+  const depots = depotList();
 
   const t0b = performance.now();
-  const bfsR = bfs(graph, depot, target);
+  const bfsR = nearestDepot(graph, depots, target);
   const tBFS = performance.now() - t0b;
 
+  if (!bfsR.path) { toast('No depot can reach that node!', 'danger'); return; }
+  const depot = bfsR.depot;
+  addLog('bfs', `BFS vs Brute Force: nearest depot ${depot} → ${target}`);
+
+  // Depth bound = optimal + slack (guaranteed to contain the shortest
+  // path while still exponential to explore).
+  const maxDepth = Math.max(bfsR.hops, 1) + 3;
   const t0bf = performance.now();
-  const bfR = bruteForce(graph, depot, target, 2000);
+  const bfR = bruteForce(graph, depot, target, maxDepth);
   const tBF = performance.now() - t0bf;
 
   const speedup = tBF / Math.max(tBFS, 0.001);
+  const fmt = ms => ms < 1 ? (ms*1000).toFixed(1)+'µs'
+                            : ms < 1000 ? ms.toFixed(2)+'ms'
+                                        : (ms/1000).toFixed(3)+'s';
 
   $('perf-content').innerHTML = `
     <table class="perf-table">
       <tr><th>Metric</th><th>BFS</th><th>Brute Force</th></tr>
-      <tr><td>Query</td><td colspan="2">${depot} → ${target}</td></tr>
-      <tr><td>Shortest Path</td><td>${bfsR.path?bfsR.path.join('→'):'N/A'}</td><td>${bfR.path?bfR.path.join('→'):'N/A'}</td></tr>
+      <tr><td>Query</td><td colspan="2">${depot} → ${target} (${graph.nodes.length} nodes)</td></tr>
       <tr><td>Hop Count</td><td>${bfsR.hops}</td><td>${bfR.hops}</td></tr>
-      <tr><td>Paths Explored</td><td class="perf-fast">1 (first hit)</td><td class="perf-slow">${bfR.count.toLocaleString()}${bfR.truncated?' (timeout)':''}</td></tr>
-      <tr><td>Complexity</td><td class="perf-fast">O(V+E)</td><td class="perf-slow">O(V!)</td></tr>
-      <tr><td>Wall-Clock</td><td class="perf-fast">${tBFS<1?tBFS.toFixed(1)+'μs':(tBFS).toFixed(2)+'ms'}</td><td class="perf-slow">${tBF.toFixed(2)}ms</td></tr>
-      <tr><td>Speedup</td><td colspan="2"><span class="perf-speedup">${speedup.toFixed(0)}× faster</span></td></tr>
+      <tr><td>Work done</td><td class="perf-fast">1 linear sweep</td><td class="perf-slow">${bfR.count.toLocaleString()} paths${bfR.truncated?' (capped)':''}</td></tr>
+      <tr><td>Search expansions</td><td class="perf-fast">O(V+E)</td><td class="perf-slow">${bfR.expanded.toLocaleString()}</td></tr>
+      <tr><td>Depth bound</td><td class="perf-fast">—</td><td class="perf-slow">${bfR.maxDepth} hops</td></tr>
+      <tr><td>Complexity</td><td class="perf-fast">O(V+E)</td><td class="perf-slow">O(b^d)</td></tr>
+      <tr><td>Wall-Clock</td><td class="perf-fast">${fmt(tBFS)}</td><td class="perf-slow">${fmt(tBF)}</td></tr>
+      <tr><td>Speedup</td><td colspan="2"><span class="perf-speedup">BFS ${speedup.toFixed(0)}× faster</span></td></tr>
     </table>`;
   switchTab('perf');
   addScore(20, 'Performance Compared');
@@ -516,6 +528,15 @@ function renderGantt(result, numCrews) {
     <div class="gantt-metric"><div class="gm-label">Total Time</div><div class="gm-value">${result.totalTime}</div></div>
     <div class="gantt-metric"><div class="gm-label">Jobs</div><div class="gm-value">${result.metrics.length}</div></div>
   </div>`;
+  if (result.crewUtil && result.totalTime) {
+    const cells = Object.keys(result.crewUtil).map(c => {
+      const u = result.crewUtil[c];
+      const pct = ((u.busy / result.totalTime) * 100).toFixed(0);
+      return `<div class="gantt-metric"><div class="gm-label">Crew ${c}</div><div class="gm-value">${pct}% busy</div></div>`;
+    }).join('');
+    html += `<div class="gantt-metrics">${cells}</div>`;
+  }
+  html += `<p class="placeholder-text" style="margin-top:8px">Wait = Turnaround − Burst · overlapping rows = crews working in parallel</p>`;
   $('gantt-chart').innerHTML = html;
 }
 
