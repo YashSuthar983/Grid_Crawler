@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Grid Fault Manager — Command Center</title>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- Fullscreen Canvas -->
+  <canvas id="grid-canvas"></canvas>
+  
+  <div id="canvas-overlay">
+    <div id="toast-container"></div>
+    <div id="algo-hud" class="hidden">
+      <span id="algo-hud-icon">🔍</span>
+      <span id="algo-hud-text">Running Algorithm...</span>
+    </div>
+  </div>
+
+  <!-- Top Left: Branding & Overview -->
+  <header class="floating-panel top-left branding">
+    <div class="logo-area">
+      <div class="logo-icon">⚡</div>
+      <div class="logo-text">
+        <h1>Grid Command</h1>
+        <span class="badge">DAA + OS</span>
+      </div>
+    </div>
+    <div class="stats-row">
+      <div class="stat">
+        <span class="stat-lbl">Score</span>
+        <span class="stat-val text-accent" id="score-val">0</span>
+      </div>
+      <div class="stat">
+        <span class="stat-lbl">Level</span>
+        <span class="stat-val" id="level-val">1</span>
+      </div>
+      <div class="stat">
+        <span class="stat-lbl">Grid Health</span>
+        <span class="stat-val" id="health-val">100%</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Top Right: Operations & Inspector -->
+  <aside class="floating-panel top-right controls">
+    <h3 class="panel-title">Operations</h3>
+    <button class="btn btn-danger" id="btn-fault">
+      <span class="icon">💥</span> Trigger Fault
+    </button>
+    <div class="action-group">
+      <button class="btn btn-primary" id="btn-bfs" disabled>
+        <span class="icon">🔵</span> BFS Path
+      </button>
+      <button class="btn btn-success" id="btn-dfs" disabled>
+        <span class="icon">🟢</span> DFS Zone
+      </button>
+    </div>
+    <button class="btn btn-warning" id="btn-dispatch" disabled>
+      <span class="icon">🚀</span> Dispatch Crews
+    </button>
+    <button class="btn btn-secondary" id="btn-compare">
+      <span class="icon">📊</span> BFS vs Brute Force
+    </button>
+    <button class="btn btn-outline" id="btn-reset">
+      <span class="icon">🔄</span> System Reset
+    </button>
+    
+    <div class="divider"></div>
+    
+    <h3 class="panel-title">Node Inspector</h3>
+    <div id="node-info-content" class="glass-box">
+      <p class="placeholder-text">Select a node on the grid.</p>
+    </div>
+
+    <div class="divider"></div>
+    
+    <h3 class="panel-title">Settings</h3>
+    <div class="settings-grid">
+      <div class="setting-item">
+        <label>Quantum</label>
+        <input type="number" id="input-quantum" value="2" min="1" max="10">
+      </div>
+      <div class="setting-item">
+        <label>Crews</label>
+        <input type="number" id="input-crews" value="3" min="1" max="6">
+      </div>
+      <div class="setting-item full-width">
+        <label>Animation Speed</label>
+        <input type="range" id="input-speed" min="1" max="10" value="5">
+      </div>
+    </div>
+  </aside>
+
+  <!-- Bottom Left: Priority Queue -->
+  <aside class="floating-panel bottom-left queue-panel">
+    <div class="panel-header">
+      <h3 class="panel-title">Priority Queue</h3>
+      <span class="fault-badge" id="fault-count">0</span>
+    </div>
+    <div id="pq-list" class="glass-box custom-scroll">
+      <p class="placeholder-text">Grid is stable. No faults.</p>
+    </div>
+  </aside>
+
+  <!-- Bottom Right: Expandable Analytics Dock -->
+  <footer class="floating-panel bottom-right analytics-dock" id="dock">
+    <div class="dock-header">
+      <div class="dock-tabs">
+        <button class="dock-tab active" data-tab="gantt">Gantt Chart</button>
+        <button class="dock-tab" data-tab="perf">Performance</button>
+        <button class="dock-tab" data-tab="log">System Log</button>
+      </div>
+      <button class="icon-btn" id="dock-toggle" title="Toggle Dock">▼</button>
+    </div>
+    <div class="dock-content custom-scroll" id="dock-content">
+      <div class="pane active" id="pane-gantt">
+        <div id="gantt-chart">
+          <p class="placeholder-text">Awaiting dispatch orders to generate timeline.</p>
+        </div>
+      </div>
+      <div class="pane" id="pane-perf">
+        <div id="perf-content">
+          <p class="placeholder-text">Run comparison to view metrics.</p>
+        </div>
+      </div>
+      <div class="pane" id="pane-log">
+        <div id="log-content"></div>
+      </div>
+    </div>
+  </footer>
+
+  <script src="engine.js"></script>
+  <script src="game.js"></script>
+</body>
+</html>
