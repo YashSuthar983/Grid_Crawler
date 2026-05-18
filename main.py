@@ -63,9 +63,13 @@ def main():
     adj_path = os.path.join(base, args.adj)
     cfg_path = os.path.join(base, args.config)
 
-    # Default demo faults: a hospital, an emergency node, another hospital
-    fault_nodes = args.faults or ["S07", "S28", "S40"]
-    repair_times = args.repair_times or [5, 3, 6]
+    # Default demo: 6 simultaneous faults, 3 crews — deliberately more
+    # faults than crews so Round Robin queueing, non-zero waiting times,
+    # and priority jumping (criticals before normals) are all visible.
+    #   S07 hospital · S40 hospital · S28 emergency  → critical
+    #   S10/S50/S33  normal substations              → low priority
+    fault_nodes = args.faults or ["S10", "S07", "S50", "S28", "S33", "S40"]
+    repair_times = args.repair_times or [4, 5, 3, 6, 4, 5]
 
     print()
     print("┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓")

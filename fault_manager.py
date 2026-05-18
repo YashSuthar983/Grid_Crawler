@@ -29,15 +29,24 @@ class FaultManager:
                  quantum=2, num_crews=3):
         self.graph = Graph.from_file(adj_file)
         self.node_config = self._load_config(config_file)
-        self.depot = depot_node
         self.quantum = quantum
         self.num_crews = num_crews
 
-        print("╔══════════════════════════════════════════════════╗")
-        print("║     GRID FAULT MANAGEMENT SYSTEM — loaded       ║")
-        print("╚══════════════════════════════════════════════════╝")
+        # Discover every depot from the node config; fall back to the
+        # CLI-supplied depot if none are classified.
+        self.depots = sorted(
+            n for n, t in self.node_config.items() if t == "depot"
+        )
+        if depot_node and depot_node not in self.depots:
+            self.depots.append(depot_node)
+        if not self.depots:
+            self.depots = [depot_node]
+
+        print("╔═══════════════════════════════════════════════════╗")
+        print("║      GRID FAULT MANAGEMENT SYSTEM — loaded        ║")
+        print("╚═══════════════════════════════════════════════════╝")
         print(f"  Graph  : {self.graph}")
-        print(f"  Depot  : {self.depot}")
+        print(f"  Depots : {', '.join(self.depots)}")
         print(f"  Config : {len(self.node_config)} nodes classified")
         print()
 
@@ -60,12 +69,20 @@ class FaultManager:
                        (defaults to 4 units each)
         """
         if repair_times is None:
-            repair_times = [4] * len(fault_nodes)
+            repair_times = []
+        # Pad/truncate so every fault has a repair time (default 4).
+        repair_times = [
+            repair_times[i] if i < len(repair_times) else 4
+            for i in range(len(fault_nodes))
+        ]
 
         # ── 1. Priority queue ──────────────────────────────────
+        # Attach each repair time to its fault BEFORE the queue
+        # reorders by priority, so the duration travels with the
+        # correct node instead of being mismatched after draining.
         pq = FaultPriorityQueue()
-        for node in fault_nodes:
-            pq.push({"node": node}, self.node_config)
+        for node, rt in zip(fault_nodes, repair_times):
+            pq.push({"node": node, "repair_time": rt}, self.node_config)
         pq.print_queue()
 
         ordered_faults = pq.drain()
@@ -79,14 +96,14 @@ class FaultManager:
                   f"(priority P{fault['priority']}, {fault['type']})")
             print(f"{'=' * 52}")
 
-            # BFS: shortest path from depot to fault
-            bfs_print_result(self.graph, self.depot, node)
+            # BFS: shortest path from the NEAREST depot to the fault
+            bfs_print_result(self.graph, self.depots, node)
 
             # DFS: affected zone mapping
             dfs_print_result(self.graph, node, self.node_config)
 
-            # Build scheduler job
-            rt = repair_times[i] if i < len(repair_times) else 4
+            # Build scheduler job (repair time travels with the fault)
+            rt = fault.get("repair_time", 4)
             jobs.append(RepairJob(
                 job_id=i + 1,
                 fault_node=node,
@@ -106,5 +123,5 @@ class FaultManager:
         # Pick the first fault for the performance comparison
         if ordered_faults:
             compare_bfs_vs_brute(
-                self.graph, self.depot, ordered_faults[0]["node"]
+                self.graph, self.depots, ordered_faults[0]["node"]
             )

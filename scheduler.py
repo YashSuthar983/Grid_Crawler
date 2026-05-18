@@ -1,22 +1,30 @@
 """
-scheduler.py — Round Robin OS scheduler with threading.
+scheduler.py — Round Robin OS scheduler with real multithreading.
 
-Each fault is a job. Each repair crew is a threading.Thread.
-The dispatcher enforces time quanta with locks and logs every
-context switch for the Gantt output.
+Model
+-----
+  • Each fault is a job with a repair-time burst.
+  • Each repair crew is a parallel server. With C crews, up to C jobs
+    are serviced *simultaneously* — no crew blocks another.
+  • Round Robin: every job gets at most one time-quantum slice before
+    going to the back of the ready queue (preemption / context switch).
+  • Within each scheduling round the dispatched crews run as genuine
+    ``threading.Thread`` workers that execute concurrently (joined at
+    the end of the round so the simulated timeline stays consistent).
 
-Key metrics tracked per crew:
+Per-job metrics
   • Arrival time
-  • Start time
+  • Start (first dispatch) time      → response time = start − arrival
   • Completion time
-  • Waiting time   = start - arrival
-  • Turnaround time = completion - arrival
+  • Turnaround time = completion − arrival
+  • Waiting time    = turnaround − burst   (the correct RR formula)
+
+Per-crew metrics
+  • Busy time, idle time, utilisation %
 """
 
 import threading
-import time
-
-from priority_queue import PRIORITY_LABELS
+from collections import deque
 
 
 class RepairJob:
@@ -30,7 +38,7 @@ class RepairJob:
         self.remaining = repair_time      # remaining units
         self.priority = priority
         self.node_type = node_type
-        self.arrival_time = 0.0
+        self.arrival_time = 0
         self.start_time = None
         self.completion_time = None
 
@@ -44,146 +52,186 @@ class RepairJob:
 
 
 class RoundRobinScheduler:
-    """Round Robin dispatcher with configurable time quantum."""
+    """Round Robin dispatcher across C parallel crews."""
 
     def __init__(self, quantum=2, num_crews=3):
         self.quantum = quantum
         self.num_crews = num_crews
         self.jobs = []
-        self.gantt_log = []       # [(crew_id, job_repr, t_start, t_end)]
+        self.crew_gantt = {}      # crew_id -> [(repr, node, t_s, t_e, crit)]
+        self.crew_busy = {}       # crew_id -> total busy units
         self.metrics = []         # per-job metrics dicts
-        self._lock = threading.Lock()
-        self._current_time = 0
+        self._print_lock = threading.Lock()
 
     def add_jobs(self, jobs):
-        """Add a list of RepairJob instances."""
+        """Add a list of RepairJob instances (all arrive at t=0)."""
         for j in jobs:
-            j.arrival_time = 0  # all arrive at time 0 in this demo
+            j.arrival_time = 0
             self.jobs.append(j)
 
+    # ── core simulation ───────────────────────────────────────────────
+
     def run(self):
-        """Execute Round Robin scheduling (simulated with threads)."""
-        queue = list(self.jobs)
-        crew_idx = 0
-        self._current_time = 0
-
-        print("\n╔══════════════════════════════════════════════════╗")
-        print("║      OS SCHEDULER — ROUND ROBIN DISPATCH        ║")
-        print("╚══════════════════════════════════════════════════╝")
+        """Execute Round Robin scheduling across parallel crews."""
+        print("\n╔═══════════════════════════════════════════════════╗")
+        print("║       OS SCHEDULER — ROUND ROBIN DISPATCH         ║")
+        print("╚═══════════════════════════════════════════════════╝")
         print(f"  Crews: {self.num_crews}  |  Quantum: {self.quantum}"
-              f"  |  Jobs: {len(queue)}")
-        print()
+              f"  |  Jobs: {len(self.jobs)}")
+        print("  (up to {0} crews work in parallel each round)\n"
+              .format(self.num_crews))
 
-        while queue:
-            job = queue.pop(0)
-            crew_id = (crew_idx % self.num_crews) + 1
+        ready = deque(self.jobs)
+        crews = {cid: {"free_at": 0, "job": None}
+                 for cid in range(1, self.num_crews + 1)}
+        self.crew_gantt = {cid: [] for cid in crews}
+        self.crew_busy = {cid: 0 for cid in crews}
 
-            if job.start_time is None:
-                job.start_time = self._current_time
+        t = 0
+        completed = 0
+        total = len(self.jobs)
+        round_no = 0
 
-            slice_time = min(self.quantum, job.remaining)
-            t_start = self._current_time
-            t_end = t_start + slice_time
+        while completed < total:
+            # 1. Release crews whose slice has finished at time t.
+            for cid in sorted(crews):
+                c = crews[cid]
+                if c["job"] is not None and c["free_at"] <= t:
+                    job = c["job"]
+                    if job.remaining > 0:
+                        ready.append(job)          # preempted → back of RR
+                    else:
+                        job.completion_time = t
+                        completed += 1
+                    c["job"] = None
 
-            # Simulate crew thread doing work
-            t = threading.Thread(
-                target=self._crew_work,
-                args=(crew_id, job, slice_time),
-                name=f"Crew-{crew_id}",
-            )
-            t.start()
-            t.join()   # sequential for deterministic Gantt
+            # 2. Assign idle crews to waiting jobs (RR order).
+            dispatched = []
+            for cid in sorted(crews):
+                c = crews[cid]
+                if c["job"] is None and ready:
+                    job = ready.popleft()
+                    if job.start_time is None:
+                        job.start_time = t
+                    sl = min(self.quantum, job.remaining)
+                    job.remaining -= sl
+                    c["job"] = job
+                    c["free_at"] = t + sl
+                    self.crew_gantt[cid].append(
+                        (repr(job), job.fault_node, t, t + sl,
+                         job.is_critical))
+                    self.crew_busy[cid] += sl
+                    dispatched.append((cid, job, sl, t))
 
-            self.gantt_log.append((crew_id, repr(job), t_start, t_end))
+            # 3. Run this round's crews as real concurrent threads.
+            if dispatched:
+                round_no += 1
+                with self._print_lock:
+                    print(f"  ── Round {round_no}  (t = {t}) "
+                          f"──────────────────────────────")
+                threads = []
+                for cid, job, sl, ts in dispatched:
+                    th = threading.Thread(
+                        target=self._crew_work,
+                        args=(cid, job, sl, ts),
+                        name=f"Crew-{cid}",
+                    )
+                    threads.append(th)
+                    th.start()
+                for th in threads:
+                    th.join()
 
-            job.remaining -= slice_time
-            self._current_time = t_end
-
-            if job.remaining > 0:
-                queue.append(job)   # re-enqueue (preempted)
+            # 4. Advance simulated time to the next crew release.
+            busy = [c["free_at"] for c in crews.values()
+                    if c["job"] is not None]
+            if busy:
+                t = min(busy)
+            elif ready:
+                continue                           # crews freed, keep going
             else:
-                job.completion_time = t_end
-                wait = job.start_time - job.arrival_time
-                turn = job.completion_time - job.arrival_time
-                self.metrics.append({
-                    "job": repr(job),
-                    "fault_node": job.fault_node,
-                    "priority": job.priority,
-                    "arrival": job.arrival_time,
-                    "start": job.start_time,
-                    "completion": job.completion_time,
-                    "waiting": wait,
-                    "turnaround": turn,
-                })
+                break
 
-            crew_idx += 1
+        self._build_metrics()
+        self._print_gantt(t)
+        self._print_metrics(t)
 
-        self._print_gantt()
-        self._print_metrics()
-
-    def _crew_work(self, crew_id, job, duration):
-        """Simulate repair work (runs inside a thread)."""
-        with self._lock:
+    def _crew_work(self, crew_id, job, duration, t_start):
+        """Simulate repair work (runs inside its own thread)."""
+        with self._print_lock:
             marker = "★" if job.is_critical else " "
-            print(f"  [{marker}] Crew {crew_id} → {job.fault_node}  "
-                  f"[t={self._current_time}–"
-                  f"{self._current_time + duration}]  "
-                  f"(remaining after: {job.remaining - duration})")
+            done = "→ DONE" if job.remaining == 0 else \
+                   f"(remaining {job.remaining})"
+            print(f"   [{marker}] Crew {crew_id} repairing {job.fault_node}"
+                  f"  t={t_start}→{t_start + duration}  {done}")
 
-    def _print_gantt(self):
-        """Print ASCII Gantt chart."""
-        print("\n  ┌─── GANTT CHART ──────────────────────────────┐")
+    # ── reporting ─────────────────────────────────────────────────────
 
-        # Build per-crew timeline
-        crew_rows = {}
-        max_time = 0
-        for crew_id, job_repr, t_s, t_e in self.gantt_log:
-            crew_rows.setdefault(crew_id, []).append((job_repr, t_s, t_e))
-            max_time = max(max_time, t_e)
+    def _build_metrics(self):
+        for job in sorted(self.jobs, key=lambda j: j.job_id):
+            turn = job.completion_time - job.arrival_time
+            wait = turn - job.total_time
+            self.metrics.append({
+                "job": repr(job),
+                "fault_node": job.fault_node,
+                "priority": job.priority,
+                "arrival": job.arrival_time,
+                "start": job.start_time,
+                "completion": job.completion_time,
+                "turnaround": turn,
+                "waiting": wait,
+            })
 
-        scale = 3   # chars per time unit
-        for crew_id in sorted(crew_rows):
+    def _print_gantt(self, end_time):
+        """Print an ASCII Gantt chart (one row per crew)."""
+        print("\n  ┌─── GANTT CHART (parallel crews) ─────────────────┐")
+        scale = 3
+        max_time = end_time
+        for cid in sorted(self.crew_gantt):
             bar = [" "] * (max_time * scale)
-            for job_repr, t_s, t_e in crew_rows[crew_id]:
-                char = "█" if "★" in job_repr else "▓"
+            for _, _, t_s, t_e, crit in self.crew_gantt[cid]:
+                char = "█" if crit else "▓"
                 for i in range(t_s * scale, t_e * scale):
                     if i < len(bar):
                         bar[i] = char
-            label = f"  Crew {crew_id}"
-            print(f"  {label:<10s}│{''.join(bar)}│")
+            print(f"  Crew {cid:<5d}│{''.join(bar)}│")
 
-        # Time axis
-        axis = "".join(f"{t:<{scale}d}" for t in range(max_time + 1))
+        axis = "".join(f"{x:<{scale}d}" for x in range(max_time + 1))
         print(f"  {'':10s}└{'─' * (max_time * scale)}┘")
         print(f"  {'':10s} {axis}")
+        print("\n  █ = critical/priority fault   ▓ = normal fault")
+        print("  Overlapping bars across rows = crews working in parallel")
+        print("  └──────────────────────────────────────────────────┘")
 
-        # Legend
-        print(f"\n  █ = critical/priority fault   ▓ = normal fault")
-        print(f"  ★ = hospital / emergency node")
-        print("  └─────────────────────────────────────────────┘")
+    def _print_metrics(self, end_time):
+        """Print per-job and per-crew metrics tables."""
+        print("\n  ┌─── PER-FAULT SCHEDULING METRICS ──────────────────────────┐")
+        print(f"  {'Job':<14s}{'Node':<7s}{'Pri':>4s}"
+              f"{'Arr':>5s}{'Start':>7s}{'Done':>6s}"
+              f"{'TAT':>6s}{'Wait':>6s}")
+        print("  " + "─" * 58)
 
-    def _print_metrics(self):
-        """Print per-job scheduling metrics table."""
-        print("\n  ┌─── SCHEDULING METRICS ────────────────────────────────────┐")
-        hdr = (f"  {'Job':<16s}{'Node':<8s}{'Pri':>4s}"
-               f"{'Arrival':>9s}{'Start':>8s}{'Done':>8s}"
-               f"{'Wait':>8s}{'TAT':>8s}")
-        print(hdr)
-        print("  " + "─" * 60)
-
-        total_wait = 0
-        total_tat = 0
+        tot_wait = tot_tat = 0
         for m in self.metrics:
-            pri_str = f"P{m['priority']}"
-            print(f"  {m['job']:<16s}{m['fault_node']:<8s}{pri_str:>4s}"
-                  f"{m['arrival']:>9.0f}{m['start']:>8.0f}"
-                  f"{m['completion']:>8.0f}"
-                  f"{m['waiting']:>8.0f}{m['turnaround']:>8.0f}")
-            total_wait += m["waiting"]
-            total_tat += m["turnaround"]
+            pri = f"P{m['priority']}"
+            print(f"  {m['job']:<14s}{m['fault_node']:<7s}{pri:>4s}"
+                  f"{m['arrival']:>5d}{m['start']:>7d}"
+                  f"{m['completion']:>6d}"
+                  f"{m['turnaround']:>6d}{m['waiting']:>6d}")
+            tot_wait += m["waiting"]
+            tot_tat += m["turnaround"]
 
         n = len(self.metrics) or 1
-        print("  " + "─" * 60)
-        print(f"  {'AVERAGE':<28s}{'':>4s}{'':>9s}{'':>8s}"
-              f"{total_wait / n:>8.1f}{total_tat / n:>8.1f}")
-        print("  └─────────────────────────────────────────────────────────┘\n")
+        print("  " + "─" * 58)
+        print(f"  {'AVERAGE':<25s}{'':>5s}{'':>7s}{'':>6s}"
+              f"{tot_tat / n:>6.1f}{tot_wait / n:>6.1f}")
+        print("  Wait = Turnaround − Burst  (standard Round Robin formula)")
+        print("  └───────────────────────────────────────────────────────────┘")
+
+        print("\n  ┌─── PER-CREW UTILISATION ──────────────────────────┐")
+        for cid in sorted(self.crew_busy):
+            busy = self.crew_busy[cid]
+            idle = end_time - busy
+            util = (busy / end_time * 100) if end_time else 0.0
+            print(f"  Crew {cid}:  busy {busy:>3d}u   idle {idle:>3d}u"
+                  f"   utilisation {util:5.1f}%")
+        print("  └───────────────────────────────────────────────────┘\n")
