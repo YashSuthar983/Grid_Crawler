@@ -116,6 +116,7 @@ export default function App() {
   const [faults, setFaults] = useState<FaultTask[]>([]);
   const [simResults, setSimResults] = useState<{ gantt: GanttEntry[]; updatedFaults: FaultTask[]; crews?: Crew[] } | null>(null);
   const [mode, setMode] = useState<'build' | 'simulate'>('build');
+  const [schedulingAlgorithm, setSchedulingAlgorithm] = useState<'fifo' | 'rr'>('fifo');
   const [selectedBuildingType, setSelectedBuildingType] = useState<Node['type']>('residential');
   const [logs, setLogs] = useState<string[]>(["[SYSTEM] Booting PacketPath Sequencer...", "[SYSTEM] Grid connection: SECURE"]);
   
@@ -307,7 +308,7 @@ export default function App() {
       crews.push({ id: 'c1', name: 'Emergency Crew', busy: false, startNodeId: graph.nodes[0].id });
     }
 
-    const results = simulateDispatch(graph, combinedFaults, crews);
+    const results = simulateDispatch(graph, combinedFaults, crews, schedulingAlgorithm);
     setSimResults({ gantt: results.gantt, updatedFaults: results.updatedFaults, crews });
   };
 
@@ -345,6 +346,26 @@ export default function App() {
     }));
   };
 
+  useEffect(() => {
+    if (mode === 'simulate' && faults.length > 0) {
+      // Spawn crews at depots
+      const depots = graph.nodes.filter(n => n.type === 'depot');
+      const crews: Crew[] = depots.map((d, i) => ({
+        id: `c${i + 1}`,
+        name: `Crew ${d.name || d.id}`,
+        busy: false,
+        startNodeId: d.id
+      }));
+      
+      if (crews.length === 0) {
+        crews.push({ id: 'c1', name: 'Emergency Crew', busy: false, startNodeId: graph.nodes[0].id });
+      }
+
+      const results = simulateDispatch(graph, faults, crews, schedulingAlgorithm);
+      setSimResults({ gantt: results.gantt, updatedFaults: results.updatedFaults, crews });
+    }
+  }, [schedulingAlgorithm]);
+
   const runSimulation = () => {
     if (faults.length === 0) {
       addLog("ERROR: No active fault tasks in buffer.");
@@ -373,7 +394,7 @@ export default function App() {
       });
     }
 
-    const results = simulateDispatch(graph, faults, crews);
+    const results = simulateDispatch(graph, faults, crews, schedulingAlgorithm);
     setSimResults({ gantt: results.gantt, updatedFaults: results.updatedFaults, crews }); // Save crews into results if needed or just use results
     setSimTime(0);
     setIsPlaying(true);
@@ -662,6 +683,26 @@ export default function App() {
               </div>
             </div>
 
+            <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg">
+              <p className="text-[9px] text-slate-500 font-black uppercase tracking-widest mb-2 flex items-center justify-between">
+                <span>Scheduler Algorithm</span>
+              </p>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  onClick={() => setSchedulingAlgorithm('fifo')}
+                  className={`py-2 text-[9px] font-black uppercase tracking-widest rounded-md transition-all border ${schedulingAlgorithm === 'fifo' ? 'bg-indigo-500 text-white border-indigo-600 shadow-sm' : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50'}`}
+                >
+                  SJF + Priority
+                </button>
+                <button
+                  onClick={() => setSchedulingAlgorithm('rr')}
+                  className={`py-2 text-[9px] font-black uppercase tracking-widest rounded-md transition-all border ${schedulingAlgorithm === 'rr' ? 'bg-indigo-500 text-white border-indigo-600 shadow-sm' : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50'}`}
+                >
+                  Round Robin
+                </button>
+              </div>
+            </div>
+
             <div className="grid grid-cols-2 gap-3 mb-2">
               <button 
                 onClick={runSimulation}
@@ -674,9 +715,8 @@ export default function App() {
               
               <button 
                 onClick={() => {
-                  setGraph({ nodes: INITIAL_NODES, edges: INITIAL_EDGES });
                   // Inject 3 random faults generator
-                  const validNodes = INITIAL_NODES.filter(n => n.type !== 'depot');
+                  const validNodes = graph.nodes.filter(n => n.type !== 'depot');
                   const shuffled = [...validNodes].sort(() => 0.5 - Math.random());
                   const targets = shuffled.slice(0, 3);
                   
@@ -690,8 +730,8 @@ export default function App() {
                   })).map(f => ({ ...f, remainingTime: f.burstTime }));
                   
                   if (mode === 'simulate') {
-                    // Spawn crews at depots based on INITIAL_NODES
-                    const depots = INITIAL_NODES.filter(n => n.type === 'depot');
+                    // Spawn crews at depots based on current graph nodes
+                    const depots = graph.nodes.filter(n => n.type === 'depot');
                     const crews: Crew[] = depots.map((d, i) => ({
                       id: `c${i + 1}`,
                       name: `Crew ${d.name || d.id}`,
@@ -699,10 +739,9 @@ export default function App() {
                       startNodeId: d.id
                     }));
                     if (crews.length === 0) {
-                      crews.push({ id: 'c1', name: 'Emergency Crew', busy: false, startNodeId: INITIAL_NODES[0].id });
+                      crews.push({ id: 'c1', name: 'Emergency Crew', busy: false, startNodeId: graph.nodes[0].id });
                     }
-                    const simGraph = { nodes: INITIAL_NODES, edges: INITIAL_EDGES };
-                    const results = simulateDispatch(simGraph, demoFaults, crews);
+                    const results = simulateDispatch(graph, demoFaults, crews, schedulingAlgorithm);
                     setFaults(demoFaults);
                     setSimResults({ gantt: results.gantt, updatedFaults: results.updatedFaults, crews });
                   } else {

@@ -157,7 +157,8 @@ export interface GanttEntry {
 export function simulateDispatch(
   graph: Graph,
   faults: FaultTask[],
-  crews: Crew[]
+  crews: Crew[],
+  schedulingMode: 'fifo' | 'rr' = 'fifo'
 ): { gantt: GanttEntry[]; updatedFaults: FaultTask[] } {
   const gantt: GanttEntry[] = [];
   const completedFaults: FaultTask[] = [];
@@ -172,10 +173,11 @@ export function simulateDispatch(
   });
 
   const TRAVEL_TIME_PER_EDGE = 2;
-  const pendingFaults = [...faults].map(f => ({ ...f }));
+  const TIME_QUANTUM = 3;
+  const pendingFaults = [...faults].map(f => ({ ...f, remainingTime: f.burstTime, queueTime: f.arrivalTime }));
   let currentTime = 0;
 
-  while (completedFaults.length < faults.length) {
+  while (pendingFaults.length > 0) {
     // Find who is the next earliest available crew
     const sortedCrews = Array.from(crewState.values()).sort((a, b) => a.availableAt - b.availableAt);
     const nextCrewTime = sortedCrews[0].availableAt;
@@ -184,14 +186,14 @@ export function simulateDispatch(
     let timeJump = nextCrewTime;
 
     // Available faults at this time jump
-    let availableFaults = pendingFaults.filter(f => f.arrivalTime <= timeJump && !completedFaults.find(cf => cf.id === f.id));
+    let availableFaults = pendingFaults.filter(f => f.arrivalTime <= timeJump);
     
     if (availableFaults.length === 0) {
       // Find the next fault that will arrive
-      const futureFaults = pendingFaults.filter(f => !completedFaults.find(cf => cf.id === f.id)).sort((a, b) => a.arrivalTime - b.arrivalTime);
+      const futureFaults = pendingFaults.sort((a, b) => a.arrivalTime - b.arrivalTime);
       if (futureFaults.length > 0) {
         timeJump = Math.max(timeJump, futureFaults[0].arrivalTime);
-        availableFaults = pendingFaults.filter(f => f.arrivalTime <= timeJump && !completedFaults.find(cf => cf.id === f.id));
+        availableFaults = pendingFaults.filter(f => f.arrivalTime <= timeJump);
       } else {
         break; // Should not happen if loop condition holds
       }
@@ -202,10 +204,14 @@ export function simulateDispatch(
     // Available crews AT this current time
     const availableCrews = sortedCrews.filter(c => c.availableAt <= currentTime);
 
-    // Sort available faults by Severity (Highest first), then Arrival Time (Earliest first)
+    // Sort available faults based on schedulingMode
     availableFaults.sort((a, b) => {
       if (a.severity !== b.severity) return b.severity - a.severity;
-      return a.arrivalTime - b.arrivalTime;
+      if (schedulingMode === 'fifo') {
+        return a.arrivalTime - b.arrivalTime;
+      } else {
+        return (a as any).queueTime - (b as any).queueTime;
+      }
     });
 
     if (availableCrews.length > 0 && availableFaults.length > 0) {
@@ -246,7 +252,10 @@ export function simulateDispatch(
       }
 
       const fixStart = selectedDepartureTime + Math.max(travelTime, 0);
-      const fixEnd = fixStart + fault.burstTime;
+      const workDone = schedulingMode === 'rr' 
+        ? Math.min(fault.remainingTime, TIME_QUANTUM)
+        : fault.remainingTime;
+      const fixEnd = fixStart + workDone;
 
       gantt.push({
         crewId: bestCrew.id,
@@ -260,10 +269,19 @@ export function simulateDispatch(
       state.availableAt = fixEnd;
       state.currentNode = fault.substationId;
       
-      fault.completionTime = fixEnd;
-      fault.waitingTime = fixEnd - fault.arrivalTime - fault.burstTime;
-      fault.remainingTime = 0;
-      completedFaults.push(fault);
+      fault.remainingTime -= workDone;
+
+      if (fault.remainingTime <= 0) {
+        fault.completionTime = fixEnd;
+        fault.waitingTime = fixEnd - fault.arrivalTime - fault.burstTime;
+        
+        const idx = pendingFaults.findIndex(f => f.id === fault.id);
+        if (idx !== -1) pendingFaults.splice(idx, 1);
+        completedFaults.push(fault);
+      } else {
+        // Round Robin: Send task to the back of the ready queue
+        (fault as any).queueTime = fixEnd;
+      }
     } else {
       // If no valid matches, advance time slightly to prevent infinite loop
       currentTime++;
